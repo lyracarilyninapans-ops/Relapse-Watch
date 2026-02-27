@@ -86,5 +86,9 @@
             </intent-filter>
         </service>
 
+        <receiver
+            android:name=".services.GeofenceBroadcastReceiver"
+            android:exported="false" />
+
     </application>
 </manifest>
