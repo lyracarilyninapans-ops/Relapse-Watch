@@ -4,6 +4,11 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.room.Room
+import com.example.relapse_watch.data.local.RelapseWatchDatabase
+import com.example.relapse_watch.data.local.dao.ActivityRecordDao
+import com.example.relapse_watch.data.local.dao.DailySummaryDao
+import com.example.relapse_watch.data.local.dao.LocationPointDao
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import dagger.Module
@@ -18,6 +23,25 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
+
+    @Provides
+    @Singleton
+    fun provideDatabase(@ApplicationContext context: Context): RelapseWatchDatabase {
+        return Room.databaseBuilder(
+            context,
+            RelapseWatchDatabase::class.java,
+            "relapse_watch.db"
+        ).fallbackToDestructiveMigration().build()
+    }
+
+    @Provides
+    fun provideActivityRecordDao(db: RelapseWatchDatabase): ActivityRecordDao = db.activityRecordDao()
+
+    @Provides
+    fun provideLocationPointDao(db: RelapseWatchDatabase): LocationPointDao = db.locationPointDao()
+
+    @Provides
+    fun provideDailySummaryDao(db: RelapseWatchDatabase): DailySummaryDao = db.dailySummaryDao()
 
     @Provides
     @Singleton
