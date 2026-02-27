@@ -18,7 +18,9 @@ import com.example.relapse_watch.presentation.model.SafeZoneStatus
 import com.example.relapse_watch.presentation.screens.MonitoringScreen
 import com.example.relapse_watch.presentation.screens.PairingScreen
 import com.example.relapse_watch.presentation.theme.Relapse_WatchTheme
+import dagger.hilt.android.AndroidEntryPoint
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
     // In a real app, this would come from a ViewModel / repository.
