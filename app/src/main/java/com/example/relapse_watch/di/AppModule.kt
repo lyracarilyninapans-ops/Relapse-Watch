@@ -8,7 +8,9 @@ import androidx.room.Room
 import com.example.relapse_watch.data.local.RelapseWatchDatabase
 import com.example.relapse_watch.data.local.dao.ActivityRecordDao
 import com.example.relapse_watch.data.local.dao.DailySummaryDao
+import com.example.relapse_watch.data.local.dao.GeoReminderDao
 import com.example.relapse_watch.data.local.dao.LocationPointDao
+import com.example.relapse_watch.data.local.dao.SafeZoneDao
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import dagger.Module
@@ -42,6 +44,12 @@ object AppModule {
 
     @Provides
     fun provideDailySummaryDao(db: RelapseWatchDatabase): DailySummaryDao = db.dailySummaryDao()
+
+    @Provides
+    fun provideSafeZoneDao(db: RelapseWatchDatabase): SafeZoneDao = db.safeZoneDao()
+
+    @Provides
+    fun provideGeoReminderDao(db: RelapseWatchDatabase): GeoReminderDao = db.geoReminderDao()
 
     @Provides
     @Singleton
