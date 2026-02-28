@@ -34,7 +34,7 @@ class PairingViewModel @Inject constructor(
         _uiState.value = PairingUiState.ShowCode(code)
 
         viewModelScope.launch {
-            val watchId = preferences.watchId.let { "watch_${System.currentTimeMillis()}" }
+            val watchId = "watch_${System.currentTimeMillis()}"
             val result = pairingRepository.createPairingEntry(code, watchId)
             if (result.isFailure) {
                 _uiState.value = PairingUiState.Error("Failed to create pairing entry")

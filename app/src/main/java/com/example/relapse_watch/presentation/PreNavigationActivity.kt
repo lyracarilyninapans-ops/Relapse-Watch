@@ -1,5 +1,6 @@
 package com.example.relapse_watch.presentation
 
+import android.content.Intent
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -23,25 +24,26 @@ class PreNavigationActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Start vibration pattern: 500ms off, 500ms on, repeating
         val vibrator = getSystemService<Vibrator>()
         vibrator?.vibrate(
             VibrationEffect.createWaveform(
                 longArrayOf(500, 500),
-                0 // repeat from index 0
+                0
             )
         )
 
         setContent {
             Relapse_WatchTheme {
-                // Countdown timer
                 LaunchedEffect(Unit) {
                     while (countdown > 0) {
                         delay(1000)
                         countdown--
                     }
-                    // Countdown finished — in a real app, this would start NavigationActivity
                     vibrator?.cancel()
+                    // Launch NavigationActivity to guide patient home
+                    startActivity(
+                        Intent(this@PreNavigationActivity, NavigationActivity::class.java)
+                    )
                     finish()
                 }
 

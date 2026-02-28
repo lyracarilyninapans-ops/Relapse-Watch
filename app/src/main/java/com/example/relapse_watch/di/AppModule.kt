@@ -33,7 +33,7 @@ object AppModule {
             context,
             RelapseWatchDatabase::class.java,
             "relapse_watch.db"
-        ).fallbackToDestructiveMigration().build()
+        ).fallbackToDestructiveMigration(dropAllTables = true).build()
     }
 
     @Provides
