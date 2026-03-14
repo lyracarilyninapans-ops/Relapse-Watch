@@ -36,6 +36,7 @@ app/google-services.json
 *.ipr
 *.iws
 .idea_modules/
+.kotlin/
 
 # OS files
 .DS_Store
@@ -43,6 +44,8 @@ Thumbs.db
 
 # Log files
 *.log
+hs_err_pid*.log
+replay_pid*.log
 
 # Misc
 *.swp
