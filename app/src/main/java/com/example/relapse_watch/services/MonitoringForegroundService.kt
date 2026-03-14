@@ -80,6 +80,13 @@ class MonitoringForegroundService : LifecycleService() {
         if (syncJob?.isActive == true) return
 
         syncJob = lifecycleScope.launch {
+            // Immediate sync on start to pull latest reminders & upload pending data
+            try {
+                syncService.syncActivityData()
+            } catch (e: Exception) {
+                Log.e(TAG, "Initial sync failed", e)
+            }
+
             while (true) {
                 delay(SYNC_INTERVAL_MS)
                 try {

@@ -5,6 +5,7 @@ data class PairingState(
     val pairingCode: String = "",
     val caregiverUid: String = "",
     val patientId: String = "",
+    val patientName: String = "",
     val watchId: String = "",
     val pairedAt: Long? = null
 )

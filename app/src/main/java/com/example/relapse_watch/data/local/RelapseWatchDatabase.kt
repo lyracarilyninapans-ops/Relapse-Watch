@@ -23,7 +23,7 @@ import com.example.relapse_watch.data.local.entity.SafeZoneEventEntity
         SafeZoneEventEntity::class,
         GeoReminderEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class RelapseWatchDatabase : RoomDatabase() {

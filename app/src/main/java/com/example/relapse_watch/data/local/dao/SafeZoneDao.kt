@@ -23,6 +23,9 @@ interface SafeZoneDao {
     @Query("DELETE FROM safe_zones")
     suspend fun deleteAll()
 
+    @Query("UPDATE safe_zones SET isActive = 0")
+    suspend fun clearActiveZone()
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertEvent(event: SafeZoneEventEntity)
 

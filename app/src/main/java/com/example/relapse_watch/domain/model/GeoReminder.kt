@@ -8,6 +8,7 @@ data class GeoReminder(
     val longitude: Double,
     val radiusMeters: Int,
     val imageUrl: String? = null,
+    val audioUrl: String? = null,
     val videoUrl: String? = null,
     val isActive: Boolean = true,
     val lastTriggeredAt: Long? = null

@@ -25,6 +25,7 @@ class WatchPreferences @Inject constructor(
         val PATIENT_ID = stringPreferencesKey("patient_id")
         val LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
         val SAFE_ZONE_RADIUS_METERS = intPreferencesKey("safe_zone_radius_meters")
+        val REMINDER_COOLDOWN_MINUTES = intPreferencesKey("reminder_cooldown_minutes")
     }
 
     val isPaired: Flow<Boolean> = dataStore.data.map { it[IS_PAIRED] ?: false }
@@ -35,6 +36,7 @@ class WatchPreferences @Inject constructor(
     val patientId: Flow<String> = dataStore.data.map { it[PATIENT_ID] ?: "" }
     val lastSyncTimestamp: Flow<Long> = dataStore.data.map { it[LAST_SYNC_TIMESTAMP] ?: 0L }
     val safeZoneRadiusMeters: Flow<Int> = dataStore.data.map { it[SAFE_ZONE_RADIUS_METERS] ?: 0 }
+    val reminderCooldownMinutes: Flow<Int> = dataStore.data.map { it[REMINDER_COOLDOWN_MINUTES] ?: 30 }
 
     suspend fun setPaired(isPaired: Boolean, caregiverUid: String, watchId: String) {
         dataStore.edit { prefs ->
@@ -77,6 +79,12 @@ class WatchPreferences @Inject constructor(
     suspend fun setSafeZoneRadius(radiusMeters: Int) {
         dataStore.edit { prefs ->
             prefs[SAFE_ZONE_RADIUS_METERS] = radiusMeters
+        }
+    }
+
+    suspend fun setReminderCooldownMinutes(minutes: Int) {
+        dataStore.edit { prefs ->
+            prefs[REMINDER_COOLDOWN_MINUTES] = minutes
         }
     }
 }

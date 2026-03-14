@@ -1,5 +1,6 @@
 package com.example.relapse_watch.services
 
+import android.util.Log
 import com.example.relapse_watch.data.preferences.WatchPreferences
 import com.example.relapse_watch.domain.model.ActivityRecord
 import com.example.relapse_watch.domain.model.DailySummary
@@ -29,7 +30,10 @@ class ActivityTrackingService @Inject constructor(
 
     suspend fun recordLocationUpdate(point: LocationPoint) {
         val patientId = preferences.patientId.first()
-        if (patientId.isBlank()) return
+        if (patientId.isBlank()) {
+            Log.w(TAG, "Dropping location update: patientId is blank")
+            return
+        }
 
         val record = ActivityRecord(
             id = UUID.randomUUID().toString(),
@@ -45,7 +49,10 @@ class ActivityTrackingService @Inject constructor(
 
     suspend fun recordSafeZoneEvent(eventType: String, point: LocationPoint) {
         val patientId = preferences.patientId.first()
-        if (patientId.isBlank()) return
+        if (patientId.isBlank()) {
+            Log.w(TAG, "Dropping safe-zone event: patientId is blank")
+            return
+        }
 
         val record = ActivityRecord(
             id = UUID.randomUUID().toString(),
@@ -60,7 +67,10 @@ class ActivityTrackingService @Inject constructor(
 
     suspend fun recordReminderTriggered(reminderId: String, point: LocationPoint) {
         val patientId = preferences.patientId.first()
-        if (patientId.isBlank()) return
+        if (patientId.isBlank()) {
+            Log.w(TAG, "Dropping reminder event: patientId is blank")
+            return
+        }
 
         val record = ActivityRecord(
             id = UUID.randomUUID().toString(),
@@ -118,5 +128,9 @@ class ActivityTrackingService @Inject constructor(
             if (isNew) clusters.add(point)
         }
         return clusters.size
+    }
+
+    companion object {
+        private const val TAG = "ActivityTracking"
     }
 }

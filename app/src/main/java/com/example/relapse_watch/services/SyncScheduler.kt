@@ -5,16 +5,18 @@ import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
+import androidx.work.ExistingWorkPolicy
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.example.relapse_watch.data.local.dao.ActivityRecordDao
-import com.example.relapse_watch.data.preferences.WatchPreferences
-import com.example.relapse_watch.data.remote.FirestoreActivitySource
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.flow.first
+import dagger.hilt.components.SingletonComponent
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -25,23 +27,45 @@ class SyncScheduler @Inject constructor(
 ) {
 
     fun schedulePeriodicSync() {
+        try {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(
+                SYNC_INTERVAL_MINUTES, TimeUnit.MINUTES
+            )
+                .setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
+                .build()
+
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                syncRequest
+            )
+            Log.d(TAG, "Periodic sync scheduled every $SYNC_INTERVAL_MINUTES minutes")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to schedule periodic sync", e)
+        }
+    }
+
+    fun requestImmediateSync() {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
-        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(
-            SYNC_INTERVAL_MINUTES, TimeUnit.MINUTES
-        )
+        val oneTimeRequest = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
             .build()
 
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            syncRequest
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            IMMEDIATE_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            oneTimeRequest
         )
-        Log.d(TAG, "Periodic sync scheduled every $SYNC_INTERVAL_MINUTES minutes")
+        Log.d(TAG, "Immediate sync requested")
     }
 
     fun cancelPeriodicSync() {
@@ -52,8 +76,15 @@ class SyncScheduler @Inject constructor(
     companion object {
         private const val TAG = "SyncScheduler"
         private const val WORK_NAME = "periodic_activity_sync"
+        private const val IMMEDIATE_WORK_NAME = "immediate_activity_sync"
         private const val SYNC_INTERVAL_MINUTES = 15L
     }
+}
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface SyncWorkerEntryPoint {
+    fun syncService(): SyncService
 }
 
 class SyncWorker(
@@ -64,10 +95,19 @@ class SyncWorker(
     override suspend fun doWork(): Result {
         return try {
             Log.d(TAG, "SyncWorker started")
-            // WorkManager-based sync is a fallback; the foreground service
-            // handles primary sync. This ensures data eventually syncs
-            // if the foreground service restarts.
-            Result.success()
+            val entryPoint = EntryPointAccessors.fromApplication(
+                applicationContext,
+                SyncWorkerEntryPoint::class.java
+            )
+            val syncService = entryPoint.syncService()
+            val syncResult = syncService.syncActivityData()
+            if (syncResult.isSuccess) {
+                Log.d(TAG, "SyncWorker synced ${syncResult.getOrDefault(0)} records")
+                Result.success()
+            } else {
+                Log.e(TAG, "SyncWorker sync failed", syncResult.exceptionOrNull())
+                Result.retry()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "SyncWorker failed", e)
             Result.retry()

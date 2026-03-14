@@ -11,27 +11,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
-import androidx.wear.compose.material3.CircularProgressIndicator
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 
+/**
+ * Full-screen alert telling the patient they are back inside the safe zone
+ * and can stop Google Maps navigation.
+ */
 @Composable
-fun PreNavigationScreen(
-    countdown: Int,
-    onCancel: () -> Unit
+fun SafeZoneReturnScreen(
+    onDismiss: () -> Unit
 ) {
     val listState = rememberScalingLazyListState()
 
@@ -47,63 +48,46 @@ fun PreNavigationScreen(
                 horizontalArrangement = Arrangement.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.Warning,
-                    contentDescription = "Warning",
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Safe",
                     modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.error
+                    tint = MaterialTheme.colorScheme.primary
                 )
-                Spacer(modifier = Modifier.size(4.dp))
+                Spacer(modifier = Modifier.size(6.dp))
                 Text(
-                    text = "Outside Safe Zone",
+                    text = "You're Safe",
                     style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.error,
+                    color = MaterialTheme.colorScheme.primary,
                     textAlign = TextAlign.Center
                 )
             }
         }
 
-        item { Spacer(modifier = Modifier.height(4.dp)) }
+        item { Spacer(modifier = Modifier.height(8.dp)) }
 
         item {
             Text(
-                text = "Navigation starts in",
+                text = "Back inside the safe zone.\nYou can stop navigation.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center
             )
         }
 
-        item { Spacer(modifier = Modifier.height(8.dp)) }
-
-        item {
-            Box(contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    progress = { countdown / 10f },
-                    modifier = Modifier.size(64.dp),
-                    strokeWidth = 4.dp
-                )
-                Text(
-                    text = "$countdown",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-
         item { Spacer(modifier = Modifier.height(16.dp)) }
 
         item {
             Button(
-                onClick = onCancel,
+                onClick = onDismiss,
                 modifier = Modifier.size(48.dp),
                 shape = CircleShape,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Red.copy(alpha = 0.8f)
+                    containerColor = MaterialTheme.colorScheme.primary
                 )
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = "Cancel",
+                    contentDescription = "Dismiss",
                     modifier = Modifier.size(24.dp)
                 )
             }

@@ -19,6 +19,19 @@ class GeofenceService @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val context: Context
 ) {
 
+    /**
+     * In-memory set of reminder geofence IDs known to be registered with the OS.
+     * Cleared on process death (boot / app update / force-stop), which is exactly
+     * when the OS also drops all geofence registrations.
+     */
+    private val registeredReminderKeys = mutableSetOf<String>()
+
+    /**
+     * Key describing the currently registered safe zone geofence.
+     * Used to skip re-registration when the same safe zone config is synced again.
+     */
+    private var currentSafeZoneKey: String? = null
+
     private val geofencePendingIntent: PendingIntent by lazy {
         val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
         PendingIntent.getBroadcast(
@@ -29,6 +42,12 @@ class GeofenceService @Inject constructor(
 
     @SuppressLint("MissingPermission")
     suspend fun registerSafeZone(config: SafeZoneConfig): Result<Unit> {
+        val key = "${config.id}|${config.centerLat}|${config.centerLng}|${config.radiusMeters}"
+        if (key == currentSafeZoneKey) {
+            Log.d(TAG, "Safe zone geofence already registered (skipped): ${config.id}")
+            return Result.success(Unit)
+        }
+
         return try {
             val geofence = Geofence.Builder()
                 .setRequestId(config.id)
@@ -38,11 +57,12 @@ class GeofenceService @Inject constructor(
                 .build()
 
             val request = GeofencingRequest.Builder()
-                .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+                .setInitialTrigger(0) // No initial trigger — prevents duplicate enter events on re-registration
                 .addGeofence(geofence)
                 .build()
 
             geofencingClient.addGeofences(request, geofencePendingIntent).await()
+            currentSafeZoneKey = key
             Log.d(TAG, "Geofence registered: ${config.id}")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -58,6 +78,13 @@ class GeofenceService @Inject constructor(
         longitude: Double,
         radiusMeters: Int
     ): Result<Unit> {
+        val key = "reminder_$id|$latitude|$longitude|$radiusMeters"
+
+        if (key in registeredReminderKeys) {
+            Log.d(TAG, "Reminder geofence already registered (skipped): $id")
+            return Result.success(Unit)
+        }
+
         return try {
             val geofence = Geofence.Builder()
                 .setRequestId("reminder_$id")
@@ -72,6 +99,7 @@ class GeofenceService @Inject constructor(
                 .build()
 
             geofencingClient.addGeofences(request, geofencePendingIntent).await()
+            registeredReminderKeys.add(key)
             Log.d(TAG, "Reminder geofence registered: $id")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -81,6 +109,7 @@ class GeofenceService @Inject constructor(
     }
 
     suspend fun removeGeofence(requestId: String): Result<Unit> {
+        registeredReminderKeys.removeAll { it.startsWith("$requestId|") }
         return try {
             geofencingClient.removeGeofences(listOf(requestId)).await()
             Log.d(TAG, "Geofence removed: $requestId")
@@ -92,6 +121,7 @@ class GeofenceService @Inject constructor(
     }
 
     suspend fun removeAllGeofences(): Result<Unit> {
+        registeredReminderKeys.clear()
         return try {
             geofencingClient.removeGeofences(geofencePendingIntent).await()
             Log.d(TAG, "All geofences removed")

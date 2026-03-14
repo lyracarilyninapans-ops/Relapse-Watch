@@ -24,6 +24,10 @@ class SafeZoneRepositoryImpl @Inject constructor(
         dao.upsertZone(config.toEntity())
     }
 
+    override suspend fun clearActiveSafeZone() {
+        dao.clearActiveZone()
+    }
+
     override suspend fun recordEvent(event: SafeZoneEvent) {
         dao.insertEvent(event.toEntity())
     }

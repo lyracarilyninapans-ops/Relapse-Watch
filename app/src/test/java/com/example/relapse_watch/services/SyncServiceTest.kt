@@ -4,6 +4,9 @@ import com.example.relapse_watch.data.local.dao.ActivityRecordDao
 import com.example.relapse_watch.data.local.entity.ActivityRecordEntity
 import com.example.relapse_watch.data.preferences.WatchPreferences
 import com.example.relapse_watch.data.remote.FirestoreActivitySource
+import com.example.relapse_watch.domain.repository.DailySummaryRepository
+import com.example.relapse_watch.domain.repository.GeoReminderRepository
+import com.example.relapse_watch.domain.repository.SafeZoneRepository
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -22,10 +25,24 @@ class SyncServiceTest {
     private val activityRecordDao: ActivityRecordDao = mock()
     private val firestoreActivitySource: FirestoreActivitySource = mock()
     private val preferences: WatchPreferences = mock()
+    private val dailySummaryRepository: DailySummaryRepository = mock()
+    private val geoReminderRepository: GeoReminderRepository = mock()
+    private val safeZoneRepository: SafeZoneRepository = mock()
+    private val geofenceService: GeofenceService = mock()
+    private val mediaCacheManager: MediaCacheManager = mock()
 
     @Before
     fun setup() {
-        syncService = SyncService(activityRecordDao, firestoreActivitySource, preferences)
+        syncService = SyncService(
+            activityRecordDao,
+            firestoreActivitySource,
+            preferences,
+            dailySummaryRepository,
+            geoReminderRepository,
+            safeZoneRepository,
+            geofenceService,
+            mediaCacheManager
+        )
     }
 
     @Test
@@ -33,6 +50,7 @@ class SyncServiceTest {
         whenever(preferences.isPaired).thenReturn(flowOf(false))
         whenever(preferences.caregiverUid).thenReturn(flowOf(""))
         whenever(preferences.patientId).thenReturn(flowOf(""))
+        whenever(preferences.watchId).thenReturn(flowOf(""))
 
         val result = syncService.syncActivityData()
 

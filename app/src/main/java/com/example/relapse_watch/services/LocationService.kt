@@ -27,8 +27,8 @@ class LocationService @Inject constructor(
 ) {
 
     @SuppressLint("MissingPermission")
-    fun getLocationUpdates(intervalMs: Long = 30_000L): Flow<LocationPoint> = callbackFlow {
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
+    fun getLocationUpdates(intervalMs: Long = 300_000L): Flow<LocationPoint> = callbackFlow {
+        val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, intervalMs)
             .setMinUpdateIntervalMillis(intervalMs / 2)
             .build()
 
@@ -57,9 +57,17 @@ class LocationService @Inject constructor(
     }
 
     fun calculateDistance(from: LocationPoint, to: LocationPoint): Float {
-        val results = FloatArray(1)
-        Location.distanceBetween(from.latitude, from.longitude, to.latitude, to.longitude, results)
-        return results[0]
+        val r = 6371000.0 // Earth radius in meters
+        val lat1 = Math.toRadians(from.latitude)
+        val lat2 = Math.toRadians(to.latitude)
+        val dLat = Math.toRadians(to.latitude - from.latitude)
+        val dLng = Math.toRadians(to.longitude - from.longitude)
+
+        val a = kotlin.math.sin(dLat / 2) * kotlin.math.sin(dLat / 2) +
+                kotlin.math.cos(lat1) * kotlin.math.cos(lat2) *
+                kotlin.math.sin(dLng / 2) * kotlin.math.sin(dLng / 2)
+        val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
+        return (r * c).toFloat()
     }
 
     fun calculateBearing(from: LocationPoint, to: LocationPoint): Float {

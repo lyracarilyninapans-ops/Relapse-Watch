@@ -9,6 +9,8 @@ import com.example.relapse_watch.presentation.screens.SettingsScreen
 import com.example.relapse_watch.presentation.theme.Relapse_WatchTheme
 import com.example.relapse_watch.viewmodel.SettingsViewModel
 import dagger.hilt.android.AndroidEntryPoint
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 
 @AndroidEntryPoint
 class SettingsActivity : ComponentActivity() {
@@ -19,8 +21,12 @@ class SettingsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
+            val cacheSize by settingsViewModel.cacheSize.collectAsState()
+
             Relapse_WatchTheme {
                 SettingsScreen(
+                    cacheSize = cacheSize,
+                    onClearCache = { settingsViewModel.clearCache() },
                     onResetPairing = {
                         settingsViewModel.resetPairing {
                             // Navigate back to MainActivity which will show PairingScreen

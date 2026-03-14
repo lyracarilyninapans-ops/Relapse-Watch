@@ -8,6 +8,7 @@ data class MonitoringState(
     val isPaired: Boolean = false,
     val patientName: String = "",
     val lastSyncTimestamp: Long? = null,
+    val lastLocationTimestamp: Long? = null,
     val safeZoneStatus: SafeZoneStatus = SafeZoneStatus.Unknown,
     val safeZoneRadiusMeters: Int? = null,
     val geoReminderCount: Int = 0

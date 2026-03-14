@@ -124,8 +124,148 @@ class NotificationService @Inject constructor(
         notificationManager.notify(NOTIFICATION_SYNC, notification)
     }
 
+    /**
+     * Shows a high-priority notification with a fullScreenIntent that opens
+     * PreNavigationActivity (countdown + vibration → Google Maps walking nav).
+     *
+     * On Wear OS a fullScreenIntent is displayed immediately as a full-screen
+     * Activity, bypassing background activity-start restrictions (Android 12+).
+     */
+    fun showSafeZoneNavigationNotification(safeZoneLat: Double, safeZoneLng: Double) {
+        val navIntent = Intent(
+            context,
+            com.example.relapse_watch.presentation.PreNavigationActivity::class.java
+        ).apply {
+            putExtra("safe_zone_lat", safeZoneLat)
+            putExtra("safe_zone_lng", safeZoneLng)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_NAVIGATION_REQUEST,
+            navIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ALERT)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Outside Safe Zone")
+            .setContentText("Navigating you back to the safe zone")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
+            .setContentIntent(fullScreenPendingIntent)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setAutoCancel(true)
+            .setOngoing(false)
+            .build()
+
+        notificationManager.notify(NOTIFICATION_NAVIGATION, notification)
+    }
+
+    fun dismissNavigationNotification() {
+        notificationManager.cancel(NOTIFICATION_NAVIGATION)
+    }
+
     fun dismissSafeZoneAlert() {
         notificationManager.cancel(NOTIFICATION_SAFE_ZONE)
+    }
+
+    /**
+     * Shows a high-priority full-screen notification that opens
+     * SafeZoneReturnActivity — tells the patient they are back
+     * inside the safe zone and can stop Google Maps navigation.
+     */
+    fun showSafeZoneReturnNotification() {
+        val returnIntent = Intent(
+            context,
+            com.example.relapse_watch.presentation.SafeZoneReturnActivity::class.java
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_RETURN_REQUEST,
+            returnIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ALERT)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Back in Safe Zone")
+            .setContentText("You can stop navigation now")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setContentIntent(fullScreenPendingIntent)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setAutoCancel(true)
+            .setOngoing(false)
+            .setVibrate(longArrayOf(0, 800, 200, 800, 200, 800))
+            .build()
+
+        // Dismiss any lingering navigation notification first
+        notificationManager.cancel(NOTIFICATION_NAVIGATION)
+        notificationManager.notify(NOTIFICATION_RETURN, notification)
+    }
+
+    fun dismissReturnNotification() {
+        notificationManager.cancel(NOTIFICATION_RETURN)
+    }
+
+    /**
+     * Shows a high-priority full-screen notification that launches
+     * ReminderActivity with media playback extras.
+     *
+     * On Wear OS (Android 12+) calling startActivity() from a background
+     * BroadcastReceiver coroutine is silently blocked. Using fullScreenIntent
+     * bypasses this restriction and wakes the screen immediately.
+     */
+    fun showReminderPlaybackNotification(
+        reminderId: String,
+        title: String,
+        body: String,
+        imageUrl: String?,
+        audioUrl: String?,
+        videoUrl: String?
+    ) {
+        val intent = Intent(context, ReminderActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("reminderId", reminderId)
+            putExtra("title", title)
+            putExtra("body", body)
+            putExtra("imageUri", imageUrl ?: "")
+            putExtra("audioUri", audioUrl ?: "")
+            putExtra("videoUri", videoUrl ?: "")
+        }
+
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_REMINDER_PLAYBACK_REQUEST,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_REMINDER)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body.ifBlank { "Tap to view your memory reminder" })
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(fullScreenPendingIntent)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setAutoCancel(true)
+            .setOngoing(false)
+            .setVibrate(longArrayOf(0, 400, 200, 400))
+            .build()
+
+        notificationManager.notify(NOTIFICATION_REMINDER_PLAYBACK, notification)
+    }
+
+    fun dismissReminderPlaybackNotification() {
+        notificationManager.cancel(NOTIFICATION_REMINDER_PLAYBACK)
     }
 
     companion object {
@@ -135,5 +275,11 @@ class NotificationService @Inject constructor(
 
         private const val NOTIFICATION_SAFE_ZONE = 2001
         private const val NOTIFICATION_SYNC = 2002
+        private const val NOTIFICATION_NAVIGATION = 2003
+        private const val NOTIFICATION_NAVIGATION_REQUEST = 3001
+        private const val NOTIFICATION_RETURN = 2004
+        private const val NOTIFICATION_RETURN_REQUEST = 3002
+        private const val NOTIFICATION_REMINDER_PLAYBACK = 2005
+        private const val NOTIFICATION_REMINDER_PLAYBACK_REQUEST = 3003
     }
 }

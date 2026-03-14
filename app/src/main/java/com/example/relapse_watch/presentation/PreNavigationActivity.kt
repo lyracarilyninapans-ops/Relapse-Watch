@@ -1,9 +1,12 @@
 package com.example.relapse_watch.presentation
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.LaunchedEffect
@@ -24,11 +27,20 @@ class PreNavigationActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val safeZoneLat = intent.getDoubleExtra("safe_zone_lat", Double.NaN)
+        val safeZoneLng = intent.getDoubleExtra("safe_zone_lng", Double.NaN)
+
+        if (safeZoneLat.isNaN() || safeZoneLng.isNaN()) {
+            Log.e(TAG, "Missing safe zone coordinates — finishing")
+            finish()
+            return
+        }
+
         val vibrator = getSystemService<Vibrator>()
         vibrator?.vibrate(
             VibrationEffect.createWaveform(
-                longArrayOf(500, 500),
-                0
+                longArrayOf(500, 500),   // 500 ms vibrate, 500 ms pause
+                0                        // repeat indefinitely
             )
         )
 
@@ -40,10 +52,7 @@ class PreNavigationActivity : ComponentActivity() {
                         countdown--
                     }
                     vibrator?.cancel()
-                    // Launch NavigationActivity to guide patient home
-                    startActivity(
-                        Intent(this@PreNavigationActivity, NavigationActivity::class.java)
-                    )
+                    launchGoogleMapsNavigation(safeZoneLat, safeZoneLng)
                     finish()
                 }
 
@@ -58,8 +67,55 @@ class PreNavigationActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Launches Google Maps Wear OS in walking-navigation mode directed
+     * toward the center of the safe zone.
+     */
+    private fun launchGoogleMapsNavigation(lat: Double, lng: Double) {
+        // Try the navigation URI first (turn-by-turn walking directions)
+        val navigationUri = Uri.parse("google.navigation:q=$lat,$lng&mode=w")
+        val navIntent = Intent(Intent.ACTION_VIEW, navigationUri)
+
+        // Try with explicit Maps package first
+        try {
+            navIntent.setPackage("com.google.android.apps.maps")
+            startActivity(navIntent)
+            Log.d(TAG, "Launched Google Maps navigation")
+            return
+        } catch (e: Exception) {
+            Log.w(TAG, "Maps package launch failed: ${e.message}")
+        }
+
+        // Fallback: try without package restriction (lets any handler respond)
+        try {
+            val fallbackNav = Intent(Intent.ACTION_VIEW, navigationUri)
+            startActivity(fallbackNav)
+            Log.d(TAG, "Launched navigation via fallback intent")
+            return
+        } catch (e: Exception) {
+            Log.w(TAG, "Navigation URI fallback failed: ${e.message}")
+        }
+
+        // Last resort: try geo: URI which more apps support
+        try {
+            val geoUri = Uri.parse("geo:$lat,$lng?q=$lat,$lng")
+            val geoIntent = Intent(Intent.ACTION_VIEW, geoUri)
+            startActivity(geoIntent)
+            Log.d(TAG, "Launched geo: URI fallback")
+            return
+        } catch (e: Exception) {
+            Log.w(TAG, "geo: URI fallback also failed: ${e.message}")
+        }
+
+        Toast.makeText(this, "No maps app available", Toast.LENGTH_SHORT).show()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         getSystemService<Vibrator>()?.cancel()
+    }
+
+    companion object {
+        private const val TAG = "PreNavigationActivity"
     }
 }

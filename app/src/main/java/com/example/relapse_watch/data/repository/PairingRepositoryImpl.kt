@@ -30,16 +30,19 @@ class PairingRepositoryImpl @Inject constructor(
                     pairingCode = code,
                     caregiverUid = data["caregiverUid"] as? String ?: "",
                     patientId = data["patientId"] as? String ?: "",
+                    patientName = data["patientName"] as? String ?: "",
                     watchId = data["watchId"] as? String ?: ""
                 )
             }
         }
     }
 
-    override suspend fun confirmPairing(caregiverUid: String, patientId: String): Result<Unit> {
+    override suspend fun confirmPairing(caregiverUid: String, patientId: String, patientName: String, watchId: String): Result<Unit> {
         return try {
-            preferences.setPaired(isPaired = true, caregiverUid = caregiverUid, watchId = "")
-            preferences.setPatientInfo(name = "", id = patientId)
+            // Store patient info BEFORE setting isPaired so the UI renders
+            // with the correct name instead of briefly showing the placeholder.
+            preferences.setPatientInfo(name = patientName, id = patientId)
+            preferences.setPaired(isPaired = true, caregiverUid = caregiverUid, watchId = watchId)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -55,7 +58,29 @@ class PairingRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun deletePairingEntry(code: String): Result<Unit> {
+        return firestorePairingSource.deletePairingEntry(code)
+    }
+
+    override suspend fun unpairCaregiver(caregiverUid: String): Result<Unit> {
+        return firestorePairingSource.unpairCaregiver(caregiverUid)
+    }
+
     override fun isPaired(): Flow<Boolean> {
         return preferences.isPaired
+    }
+
+    override fun observeRemoteUnpairCommand(pairingCode: String): Flow<Boolean> {
+        return firestorePairingSource.observePairingStatus(pairingCode)
+            .map { data -> data?.get("status") == "unpaired" }
+    }
+
+    override fun observeCaregiverUnpairCommand(caregiverUid: String): Flow<Boolean> {
+        return firestorePairingSource.observeCaregiverPairingStatus(caregiverUid)
+            .map { status -> status == "unpaired" }
+    }
+
+    override fun observePatientDocument(caregiverUid: String, patientId: String): Flow<Map<String, Any>?> {
+        return firestorePairingSource.observePatientDocument(caregiverUid, patientId)
     }
 }

@@ -42,6 +42,10 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -73,6 +77,7 @@ dependencies {
 
     // Coil (Image Loading)
     implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 
     // Hilt (Dependency Injection)
     implementation(libs.hilt.android)
@@ -83,6 +88,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore)
     implementation(libs.firebase.auth)
+    implementation(libs.firebase.storage)
 
     // Play Services
     implementation(libs.play.services.location)
@@ -106,4 +112,13 @@ dependencies {
 
     // Serialization
     implementation(libs.kotlinx.serialization.json)
+
+    // Media3 (ExoPlayer)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
+
+    // Testing
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 }
