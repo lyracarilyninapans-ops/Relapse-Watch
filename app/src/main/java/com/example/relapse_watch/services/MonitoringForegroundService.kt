@@ -13,6 +13,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.example.relapse_watch.R
 import com.example.relapse_watch.data.preferences.WatchPreferences
+import com.example.relapse_watch.data.remote.FirestoreActivitySource
 import com.example.relapse_watch.domain.model.EventTypes
 import com.example.relapse_watch.domain.model.LocationPoint
 import com.example.relapse_watch.domain.repository.GeoReminderRepository
@@ -21,6 +22,8 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -37,10 +40,15 @@ class MonitoringForegroundService : LifecycleService() {
     @Inject lateinit var wearableCommunicationService: WearableCommunicationService
     @Inject lateinit var notificationService: NotificationService
     @Inject lateinit var safeZoneRepository: com.example.relapse_watch.domain.repository.SafeZoneRepository
+    @Inject lateinit var firestoreActivitySource: FirestoreActivitySource
+    @Inject lateinit var geofenceService: GeofenceService
 
     private var trackingJob: Job? = null
     private var syncJob: Job? = null
-    private var isInsideSafeZone: Boolean? = null
+    private var safeZoneListenerJob: Job? = null
+    private var reminderListenerJob: Job? = null
+    // isInsideSafeZone is persisted in WatchPreferences (DataStore)
+    // so it survives service restarts and device reboots.
 
     override fun onCreate() {
         super.onCreate()
@@ -62,6 +70,7 @@ class MonitoringForegroundService : LifecycleService() {
         startForeground(NOTIFICATION_ID, buildNotification())
         startTracking()
         startPeriodicSync()
+        startRealtimeListeners()
 
         return START_STICKY
     }
@@ -119,9 +128,14 @@ class MonitoringForegroundService : LifecycleService() {
                 val distance = locationService.calculateDistance(location, reminderCenter)
 
                 if (distance <= reminder.radiusMeters) {
+                    val correlation = "${reminder.id}:$now"
                     // Patient is inside this reminder zone
                     val lastTriggeredAt = reminder.lastTriggeredAt ?: 0L
                     if ((now - lastTriggeredAt) < cooldownMs) {
+                        Log.d(
+                            TAG,
+                            "[REMINDER_PROXIMITY][SKIP_COOLDOWN] key=$correlation id=${reminder.id} now=$now last=$lastTriggeredAt cooldownMs=$cooldownMs remainingMs=${cooldownMs - (now - lastTriggeredAt)}"
+                        )
                         // Still in cooldown — skip
                         continue
                     }
@@ -130,6 +144,10 @@ class MonitoringForegroundService : LifecycleService() {
 
                     // Mark as triggered (same as geofence path)
                     geoReminderRepository.markAsTriggered(reminder.id, now)
+                    Log.d(
+                        TAG,
+                        "[REMINDER_PROXIMITY][MARKED] key=$correlation id=${reminder.id} triggeredAt=$now prevLast=$lastTriggeredAt cooldownMs=$cooldownMs distance=$distance"
+                    )
 
                     // Record activity event
                     activityTrackingService.recordReminderTriggered(reminder.id, location)
@@ -138,12 +156,17 @@ class MonitoringForegroundService : LifecycleService() {
                     reminderPlaybackQueueManager.enqueue(
                         ReminderPlaybackRequest(
                             reminderId = reminder.id,
+                            triggeredAt = now,
                             title = reminder.title,
                             body = reminder.body,
                             imageUrl = reminder.imageUrl,
                             audioUrl = reminder.audioUrl,
                             videoUrl = reminder.videoUrl
                         )
+                    )
+                    Log.d(
+                        TAG,
+                        "[REMINDER_PROXIMITY][ENQUEUED] key=$correlation id=${reminder.id} triggeredAt=$now hasAudio=${!reminder.audioUrl.isNullOrBlank()} distance=$distance"
                     )
 
                     // Notify the phone
@@ -170,7 +193,10 @@ class MonitoringForegroundService : LifecycleService() {
             val distance = locationService.calculateDistance(location, safeZoneCenter)
             val currentlyInside = distance <= activeZone.radiusMeters
 
-            if (isInsideSafeZone != null && isInsideSafeZone != currentlyInside) {
+            // Read persisted state from DataStore (survives reboots)
+            val previouslyInside = watchPreferences.isInsideSafeZone.first()
+
+            if (previouslyInside != null && previouslyInside != currentlyInside) {
                 val eventType = if (currentlyInside) EventTypes.SAFE_ZONE_ENTER else EventTypes.SAFE_ZONE_EXIT
                 val event = com.example.relapse_watch.domain.model.SafeZoneEvent(
                     id = java.util.UUID.randomUUID().toString(),
@@ -183,17 +209,20 @@ class MonitoringForegroundService : LifecycleService() {
                 safeZoneRepository.recordEvent(event)
                 activityTrackingService.recordSafeZoneEvent(eventType, location)
 
+                // Immediate sync on ANY transition so the cloud function
+                // can evaluate and send FCM push notifications promptly.
+                try {
+                    syncService.syncActivityData()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Sync failed during safe-zone transition", e)
+                }
+
                 val alertsEnabled = activeZone.alarmEnabled || activeZone.vibrationEnabled
                 if (alertsEnabled) {
                     wearableCommunicationService.sendSafeZoneAlert(eventType, location.latitude, location.longitude)
                 }
 
                 if (eventType == EventTypes.SAFE_ZONE_EXIT) {
-                    try {
-                        syncService.syncActivityData()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Sync failed during proximity safe-zone exit", e)
-                    }
                     notificationService.showSafeZoneNavigationNotification(activeZone.centerLat, activeZone.centerLng)
                     Log.d(TAG, "Proximity trigger: Safe zone exit notification posted")
                 } else {
@@ -202,7 +231,8 @@ class MonitoringForegroundService : LifecycleService() {
                 }
             }
 
-            isInsideSafeZone = currentlyInside
+            // Persist state in DataStore
+            watchPreferences.setInsideSafeZone(currentlyInside)
         } catch (e: Exception) {
             Log.e(TAG, "Proximity check for safe zone failed", e)
         }
@@ -236,12 +266,62 @@ class MonitoringForegroundService : LifecycleService() {
         Log.d(TAG, "Periodic sync started (interval: ${SYNC_INTERVAL_MS / 1000}s)")
     }
 
+    /**
+     * Real-time Firestore listeners for safe zone and reminder changes.
+     * These run inside the foreground service's lifecycleScope, so they
+     * survive screen-off and backgrounding — unlike the old ViewModel-based
+     * listeners that died the moment the watch UI was dismissed.
+     */
+    private fun startRealtimeListeners() {
+        if (safeZoneListenerJob?.isActive == true && reminderListenerJob?.isActive == true) return
+
+        safeZoneListenerJob = lifecycleScope.launch {
+            combine(
+                watchPreferences.isPaired,
+                watchPreferences.caregiverUid,
+                watchPreferences.patientId
+            ) { paired, uid, pid -> Triple(paired, uid, pid) }
+                .collectLatest { (paired, uid, pid) ->
+                    if (paired && uid.isNotBlank() && pid.isNotBlank()) {
+                        firestoreActivitySource.observeActiveSafeZone(uid, pid)
+                            .collectLatest {
+                                Log.d(TAG, "Real-time safe zone change detected, syncing")
+                                syncService.syncSafeZoneFromFirestore(uid, pid)
+                            }
+                    }
+                }
+        }
+        Log.d(TAG, "Real-time safe zone listener started")
+
+        reminderListenerJob = lifecycleScope.launch {
+            combine(
+                watchPreferences.isPaired,
+                watchPreferences.caregiverUid,
+                watchPreferences.patientId
+            ) { paired, uid, pid -> Triple(paired, uid, pid) }
+                .collectLatest { (paired, uid, pid) ->
+                    if (paired && uid.isNotBlank() && pid.isNotBlank()) {
+                        firestoreActivitySource.observeActiveReminders(uid, pid)
+                            .collectLatest {
+                                Log.d(TAG, "Real-time reminder change detected, syncing")
+                                syncService.syncGeoRemindersFromFirestore(uid, pid)
+                            }
+                    }
+                }
+        }
+        Log.d(TAG, "Real-time reminder listener started")
+    }
+
     private fun stopTracking() {
         trackingJob?.cancel()
         trackingJob = null
         syncJob?.cancel()
         syncJob = null
-        Log.d(TAG, "Tracking and sync stopped")
+        safeZoneListenerJob?.cancel()
+        safeZoneListenerJob = null
+        reminderListenerJob?.cancel()
+        reminderListenerJob = null
+        Log.d(TAG, "Tracking, sync, and real-time listeners stopped")
     }
 
     private fun createNotificationChannel() {

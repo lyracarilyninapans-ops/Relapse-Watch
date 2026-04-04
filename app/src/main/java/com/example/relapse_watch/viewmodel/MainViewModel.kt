@@ -3,7 +3,6 @@ package com.example.relapse_watch.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.relapse_watch.data.preferences.WatchPreferences
-import com.example.relapse_watch.data.remote.FirestoreActivitySource
 import com.example.relapse_watch.domain.repository.ActivityRepository
 import com.example.relapse_watch.domain.model.LocationPoint
 import com.example.relapse_watch.domain.repository.GeoReminderRepository
@@ -15,9 +14,7 @@ import com.example.relapse_watch.services.LocationService
 import com.example.relapse_watch.services.SyncService
 import com.example.relapse_watch.domain.usecase.UnpairUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
@@ -41,24 +38,15 @@ class MainViewModel @Inject constructor(
     private val activityTrackingService: ActivityTrackingService,
     private val syncService: SyncService,
     private val unpairUseCase: UnpairUseCase,
-    private val firestoreActivitySource: FirestoreActivitySource,
     val preferences: WatchPreferences
 ) : ViewModel() {
 
     private val _safeZoneStatus = MutableStateFlow(SafeZoneStatus.Unknown)
     val safeZoneStatus: StateFlow<SafeZoneStatus> = _safeZoneStatus
 
-    /** One-shot event: emits safe zone center coordinates when the patient
-     *  transitions to Outside. MainActivity observes this to launch
-     *  PreNavigationActivity (software backup for geofence-based trigger). */
-    private val _navigateToSafeZone = MutableSharedFlow<Pair<Double, Double>>(extraBufferCapacity = 1)
-    val navigateToSafeZone: SharedFlow<Pair<Double, Double>> = _navigateToSafeZone
-
-    /** One-shot event: emits when the patient transitions back to Inside.
-     *  MainActivity observes this to launch SafeZoneReturnActivity
-     *  (tells patient to stop Google Maps navigation). */
-    private val _returnedToSafeZone = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    val returnedToSafeZone: SharedFlow<Unit> = _returnedToSafeZone
+    // Safe zone navigation/return triggers are handled exclusively by
+    // MonitoringForegroundService.checkSafeZoneProximity() — the single
+    // authority for launching PreNavigationActivity / SafeZoneReturnActivity.
 
     init {
         // Listen for phone-initiated unpair: monitor BOTH the global
@@ -189,43 +177,9 @@ class MainViewModel @Inject constructor(
                 }
         }
 
-        // Real-time Firestore listener for safe zone changes.
-        // When the phone app creates/edits/deletes a safe zone, the watch
-        // picks it up immediately instead of waiting for the 15-min periodic sync.
-        viewModelScope.launch {
-            combine(
-                preferences.isPaired,
-                preferences.caregiverUid,
-                preferences.patientId
-            ) { paired, uid, pid -> Triple(paired, uid, pid) }
-                .collectLatest { (paired, uid, pid) ->
-                    if (paired && uid.isNotBlank() && pid.isNotBlank()) {
-                        firestoreActivitySource.observeActiveSafeZone(uid, pid)
-                            .collectLatest {
-                                syncService.syncSafeZoneFromFirestore(uid, pid)
-                            }
-                    }
-                }
-        }
-
-        // Real-time Firestore listener for geo-reminder changes.
-        // When the phone app creates/edits/deletes a memory reminder,
-        // the watch picks it up immediately.
-        viewModelScope.launch {
-            combine(
-                preferences.isPaired,
-                preferences.caregiverUid,
-                preferences.patientId
-            ) { paired, uid, pid -> Triple(paired, uid, pid) }
-                .collectLatest { (paired, uid, pid) ->
-                    if (paired && uid.isNotBlank() && pid.isNotBlank()) {
-                        firestoreActivitySource.observeActiveReminders(uid, pid)
-                            .collectLatest {
-                                syncService.syncGeoRemindersFromFirestore(uid, pid)
-                            }
-                    }
-                }
-        }
+        // NOTE: Real-time Firestore listeners for safe zone and reminder
+        // changes now live in MonitoringForegroundService so they survive
+        // screen-off and backgrounding (see startRealtimeListeners()).
 
         viewModelScope.launch {
             safeZoneRepository.getActiveSafeZone().collectLatest { zone ->
@@ -252,18 +206,6 @@ class MainViewModel @Inject constructor(
                             SafeZoneStatus.Outside
                         }
                         _safeZoneStatus.value = newStatus
-
-                        // Software-based navigation trigger — fires when
-                        // the patient first crosses outside the safe zone.
-                        if (newStatus == SafeZoneStatus.Outside && previousStatus != SafeZoneStatus.Outside) {
-                            _navigateToSafeZone.tryEmit(Pair(zone.centerLat, zone.centerLng))
-                        }
-
-                        // Software-based return trigger — fires when
-                        // the patient crosses back inside the safe zone.
-                        if (newStatus == SafeZoneStatus.Inside && previousStatus == SafeZoneStatus.Outside) {
-                            _returnedToSafeZone.tryEmit(Unit)
-                        }
                     }
             }
         }

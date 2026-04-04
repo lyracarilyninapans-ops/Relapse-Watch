@@ -38,6 +38,28 @@ class FirestoreActivitySource @Inject constructor(
         }
     }
 
+    suspend fun uploadSafeZoneEvents(
+        caregiverUid: String,
+        patientId: String,
+        events: List<Map<String, Any>>
+    ): Result<Unit> {
+        return try {
+            val basePath = "users/$caregiverUid/patients/$patientId/safeZoneEvents"
+            events.chunked(BATCH_SIZE).forEach { chunk ->
+                val batch = firestore.batch()
+                chunk.forEach { event ->
+                    val docId = event["id"] as String
+                    val docRef = firestore.collection(basePath).document(docId)
+                    batch.set(docRef, event, com.google.firebase.firestore.SetOptions.merge())
+                }
+                batch.commit().await()
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun updateWatchStatus(
         caregiverUid: String,
         patientId: String,

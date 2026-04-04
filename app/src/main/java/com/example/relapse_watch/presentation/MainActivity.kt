@@ -119,33 +119,9 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Software-based safe-zone navigation backup.
-                // When MainViewModel detects the patient transitioned to
-                // Outside, launch PreNavigationActivity from this Activity
-                // context (avoids background activity-start restrictions).
-                LaunchedEffect(Unit) {
-                    mainViewModel.navigateToSafeZone.collect { (lat, lng) ->
-                        Log.d(TAG, "Software safe-zone trigger → launching PreNavigationActivity")
-                        startActivity(
-                            Intent(this@MainActivity, PreNavigationActivity::class.java).apply {
-                                putExtra("safe_zone_lat", lat)
-                                putExtra("safe_zone_lng", lng)
-                            }
-                        )
-                    }
-                }
-
-                // Software-based return-to-safe-zone alert.
-                // When the patient crosses back inside, show a full-screen
-                // alert telling them to stop Google Maps navigation.
-                LaunchedEffect(Unit) {
-                    mainViewModel.returnedToSafeZone.collect {
-                        Log.d(TAG, "Software safe-zone return → launching SafeZoneReturnActivity")
-                        startActivity(
-                            Intent(this@MainActivity, SafeZoneReturnActivity::class.java)
-                        )
-                    }
-                }
+                // Safe zone navigation/return triggers (PreNavigationActivity,
+                // SafeZoneReturnActivity) are handled exclusively by
+                // MonitoringForegroundService.checkSafeZoneProximity().
 
                 if (!isPaired && !pairingConfirmed) {
                     PairingScreen(

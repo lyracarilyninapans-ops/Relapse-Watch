@@ -28,6 +28,7 @@ class WatchPreferences @Inject constructor(
         val SAFE_ZONE_RADIUS_METERS = intPreferencesKey("safe_zone_radius_meters")
         val REMINDER_COOLDOWN_MINUTES = intPreferencesKey("reminder_cooldown_minutes")
         val REGISTERED_GEOFENCE_KEYS = stringSetPreferencesKey("registered_geofence_keys")
+        val IS_INSIDE_SAFE_ZONE = stringPreferencesKey("is_inside_safe_zone")
     }
 
     val isPaired: Flow<Boolean> = dataStore.data.map { it[IS_PAIRED] ?: false }
@@ -40,6 +41,14 @@ class WatchPreferences @Inject constructor(
     val safeZoneRadiusMeters: Flow<Int> = dataStore.data.map { it[SAFE_ZONE_RADIUS_METERS] ?: 0 }
     val reminderCooldownMinutes: Flow<Int> = dataStore.data.map { it[REMINDER_COOLDOWN_MINUTES] ?: 30 }
     val registeredGeofenceKeys: Flow<Set<String>> = dataStore.data.map { it[REGISTERED_GEOFENCE_KEYS] ?: emptySet() }
+    // Nullable Boolean: null = unknown (first run / after clear), true/false = known state
+    val isInsideSafeZone: Flow<Boolean?> = dataStore.data.map {
+        when (it[IS_INSIDE_SAFE_ZONE]) {
+            "true" -> true
+            "false" -> false
+            else -> null
+        }
+    }
 
     suspend fun setPaired(isPaired: Boolean, caregiverUid: String, watchId: String) {
         dataStore.edit { prefs ->
@@ -108,6 +117,18 @@ class WatchPreferences @Inject constructor(
     suspend fun clearRegisteredGeofenceKeys() {
         dataStore.edit { prefs ->
             prefs[REGISTERED_GEOFENCE_KEYS] = emptySet()
+        }
+    }
+
+    suspend fun setInsideSafeZone(inside: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[IS_INSIDE_SAFE_ZONE] = inside.toString()
+        }
+    }
+
+    suspend fun clearInsideSafeZone() {
+        dataStore.edit { prefs ->
+            prefs.remove(IS_INSIDE_SAFE_ZONE)
         }
     }
 }

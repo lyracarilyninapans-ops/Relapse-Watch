@@ -1,7 +1,5 @@
 package com.example.relapse_watch.presentation.screens
 
-import android.media.AudioAttributes
-import android.media.MediaPlayer
 import android.net.Uri
 import android.util.Log
 import androidx.compose.foundation.background
@@ -29,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.AudioAttributes as ExoAudioAttributes
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.wear.compose.material3.MaterialTheme
@@ -37,11 +36,13 @@ import androidx.wear.compose.material3.CircularProgressIndicator
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import coil3.request.ImageRequest
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun ReminderScreen(
+    correlationKey: String? = null,
     title: String,
     body: String,
     imageUri: Uri? = null,
@@ -70,14 +71,17 @@ fun ReminderScreen(
     var imageLoadFailed by remember(mode) { mutableStateOf(false) }
 
     LaunchedEffect(mode, imageUri, audioUri, videoUri) {
+        val key = correlationKey ?: "unknown"
         Log.d(
             TAG,
-            "Playback mode=$mode image=${imageUri != null} audio=${audioUri != null} video=${videoUri != null}"
+            "[R_TRACE][REMINDER_PLAYBACK] key=$key mode=$mode image=${imageUri != null} audio=${audioUri != null} video=${videoUri != null}"
         )
     }
 
     if (mode == PlaybackMode.AudioOnly || mode == PlaybackMode.PhotoWithAudio) {
         AudioPlaybackEffect(
+            context = context,
+            correlationKey = correlationKey,
             audioUri = audioUri,
             onReady = { durationMs ->
                 fallbackDurationMs = durationMs
@@ -85,7 +89,11 @@ fun ReminderScreen(
             },
             onCompleted = onPlaybackFinished,
             onError = {
-                mediaLoadError = true
+                if (mode == PlaybackMode.PhotoWithAudio && imageUri != null) {
+                    playbackReady = true
+                } else {
+                    mediaLoadError = true
+                }
             }
         )
     }
@@ -100,7 +108,7 @@ fun ReminderScreen(
         LaunchedEffect(videoUri) {
             delay(15000L) // 15s timeout
             if (!isReady) {
-                Log.e(TAG, "Video ExoPlayer stream timed out for uri=$videoUri")
+                Log.e(TAG, "[R_TRACE][REMINDER_PLAYBACK][VIDEO_TIMEOUT] key=${correlationKey ?: "unknown"} uri=$videoUri")
                 mediaLoadError = true
             }
         }
@@ -119,7 +127,7 @@ fun ReminderScreen(
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
-                    Log.e(TAG, "ExoPlayer error for uri=$videoUri", error)
+                    Log.e(TAG, "[R_TRACE][REMINDER_PLAYBACK][VIDEO_ERROR] key=${correlationKey ?: "unknown"} uri=$videoUri", error)
                     mediaLoadError = true
                 }
             }
@@ -135,9 +143,13 @@ fun ReminderScreen(
         }
     }
 
-    // Handle generic timeout/duration for errors or text/photo only
+    val shouldUseAutoFinishTimer = remember(mode, mediaLoadError) {
+        mediaLoadError || mode == PlaybackMode.PhotoOnly || mode == PlaybackMode.TextOnly
+    }
+
+    // Auto-finish timer is only for non-player flows or explicit media error states.
     LaunchedEffect(playbackReady, mediaLoadError, mode) {
-        if (playbackReady || mediaLoadError || mode == PlaybackMode.PhotoOnly || mode == PlaybackMode.TextOnly) {
+        if (shouldUseAutoFinishTimer) {
             delay(fallbackDurationMs)
             onPlaybackFinished()
         }
@@ -327,6 +339,8 @@ fun ReminderScreen(
 
 @Composable
 private fun AudioPlaybackEffect(
+    context: android.content.Context,
+    correlationKey: String?,
     audioUri: Uri?,
     onReady: (Long) -> Unit,
     onCompleted: () -> Unit,
@@ -338,47 +352,112 @@ private fun AudioPlaybackEffect(
     }
 
     var isReady by remember(audioUri) { mutableStateOf(false) }
+    val terminalCallbackDelivered = remember(audioUri) { AtomicBoolean(false) }
 
     LaunchedEffect(audioUri) {
         delay(15000L) // 15s timeout
-        if (!isReady) {
-            Log.e(TAG, "Audio stream timed out for uri=$audioUri")
+        if (!isReady && terminalCallbackDelivered.compareAndSet(false, true)) {
+            Log.e(TAG, "[R_TRACE][REMINDER_PLAYBACK][AUDIO_TIMEOUT] key=${correlationKey ?: "unknown"} uri=$audioUri")
             onError()
         }
     }
 
+    LaunchedEffect(audioUri, isReady) {
+        if (!isReady) return@LaunchedEffect
+        delay(MAX_AUDIO_PLAYBACK_MS)
+        if (terminalCallbackDelivered.compareAndSet(false, true)) {
+            Log.d(TAG, "[R_TRACE][REMINDER_PLAYBACK][AUDIO_MAX_DURATION] key=${correlationKey ?: "unknown"} maxMs=$MAX_AUDIO_PLAYBACK_MS")
+            onCompleted()
+        }
+    }
+
     DisposableEffect(audioUri) {
-        val mediaPlayer = MediaPlayer()
-        try {
-            mediaPlayer.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .build()
-            )
-            mediaPlayer.setDataSource(audioUri.toString())
-            mediaPlayer.setOnPreparedListener { player ->
-                isReady = true
-                val rawDuration = player.duration.toLong()
-                onReady(if (rawDuration > 0) rawDuration else DEFAULT_DISPLAY_DURATION_MS)
-                player.start()
-            }
-            mediaPlayer.setOnCompletionListener {
-                onCompleted()
-            }
-            mediaPlayer.setOnErrorListener { _, _, _ ->
+        val exoPlayer = ExoPlayer.Builder(context).build()
+        val released = AtomicBoolean(false)
+
+        fun safeSignalError() {
+            if (released.get()) return
+            if (terminalCallbackDelivered.compareAndSet(false, true)) {
                 onError()
-                true
             }
-            mediaPlayer.prepareAsync()
-        } catch (_: Exception) {
-            onError()
         }
 
-        onDispose {
-            runCatching {
-                if (mediaPlayer.isPlaying) mediaPlayer.stop()
-                mediaPlayer.release()
+        fun safeSignalCompleted() {
+            if (released.get()) return
+            if (terminalCallbackDelivered.compareAndSet(false, true)) {
+                onCompleted()
+            }
+        }
+
+        try {
+            val audioAttributes = ExoAudioAttributes.Builder()
+                .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                .build()
+
+            val focusSetup = runCatching {
+                exoPlayer.setAudioAttributes(audioAttributes, true)
+            }
+            if (focusSetup.isFailure) {
+                Log.w(TAG, "Media3 audio focus setup failed, retrying without audio focus", focusSetup.exceptionOrNull())
+                runCatching {
+                    exoPlayer.setAudioAttributes(audioAttributes, false)
+                }.onFailure { fallbackError ->
+                    Log.e(TAG, "Media3 audio attribute fallback failed", fallbackError)
+                    safeSignalError()
+                    return@DisposableEffect onDispose {
+                        released.set(true)
+                        runCatching { exoPlayer.release() }
+                    }
+                }
+            }
+
+            val listener = object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (released.get()) return
+
+                    if (playbackState == Player.STATE_READY && !isReady) {
+                        isReady = true
+                        val rawDuration = exoPlayer.duration
+                        val effectiveDuration = if (rawDuration > 0) {
+                            rawDuration.coerceAtMost(MAX_AUDIO_PLAYBACK_MS)
+                        } else {
+                            DEFAULT_DISPLAY_DURATION_MS
+                        }
+                        onReady(effectiveDuration)
+                    } else if (playbackState == Player.STATE_ENDED) {
+                        safeSignalCompleted()
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    Log.e(TAG, "[R_TRACE][REMINDER_PLAYBACK][AUDIO_ERROR] key=${correlationKey ?: "unknown"} uri=$audioUri", error)
+                    safeSignalError()
+                }
+            }
+
+            exoPlayer.addListener(listener)
+            exoPlayer.setMediaItem(MediaItem.fromUri(audioUri))
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+
+            onDispose {
+                released.set(true)
+                runCatching {
+                    exoPlayer.playWhenReady = false
+                    exoPlayer.stop()
+                    exoPlayer.removeListener(listener)
+                    exoPlayer.release()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Audio setup failed for uri=$audioUri", e)
+            safeSignalError()
+            onDispose {
+                released.set(true)
+                runCatching {
+                    exoPlayer.release()
+                }
             }
         }
     }
@@ -393,4 +472,5 @@ private enum class PlaybackMode {
 }
 
 private const val DEFAULT_DISPLAY_DURATION_MS = 10_000L
+private const val MAX_AUDIO_PLAYBACK_MS = 120_000L
 private const val TAG = "ReminderScreen"

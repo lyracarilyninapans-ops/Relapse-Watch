@@ -62,6 +62,11 @@ class SyncService @Inject constructor(
             // Always sync today's daily summary
             syncDailySummaryToFirestore(caregiverUid, patientId)
 
+            // Upload pending safe zone events to Firestore so the
+            // onSafeZoneEventCreated cloud function fires and sends
+            // FCM push notifications to the caregiver.
+            syncSafeZoneEventsToFirestore(caregiverUid, patientId)
+
             // Sync geo-reminders from Firestore into local Room DB
             val remindersSynced = syncGeoRemindersFromFirestore(caregiverUid, patientId)
 
@@ -109,6 +114,48 @@ class SyncService @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Sync failed", e)
             Result.failure(e)
+        }
+    }
+
+    private suspend fun syncSafeZoneEventsToFirestore(caregiverUid: String, patientId: String) {
+        try {
+            val pendingEvents = safeZoneRepository.getPendingEventUpload()
+            if (pendingEvents.isEmpty()) return
+
+            Log.d(TAG, "Uploading ${pendingEvents.size} safe zone events")
+
+            val firestoreMaps = pendingEvents.map { event ->
+                // Cloud function expects "exit" / "enter" — not the watch's
+                // "safe_zone_exit" / "safe_zone_enter" constants.
+                val cloudEventType = event.eventType
+                    .removePrefix("safe_zone_")
+                mutableMapOf<String, Any>(
+                    "id" to event.id,
+                    "patientId" to patientId,
+                    "safeZoneId" to event.safeZoneId,
+                    "eventType" to cloudEventType,
+                    "timestamp" to Timestamp(event.timestamp / 1000, ((event.timestamp % 1000) * 1_000_000).toInt()),
+                    "latitude" to event.latitude,
+                    "longitude" to event.longitude,
+                    "source" to "watch_geofence",
+                    "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                )
+            }
+
+            val uploadResult = firestoreActivitySource.uploadSafeZoneEvents(
+                caregiverUid = caregiverUid,
+                patientId = patientId,
+                events = firestoreMaps
+            )
+
+            if (uploadResult.isSuccess) {
+                safeZoneRepository.markEventsUploaded(pendingEvents.map { it.id })
+                Log.d(TAG, "Successfully uploaded ${pendingEvents.size} safe zone events")
+            } else {
+                Log.e(TAG, "Safe zone event upload failed", uploadResult.exceptionOrNull())
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to sync safe zone events to Firestore", e)
         }
     }
 

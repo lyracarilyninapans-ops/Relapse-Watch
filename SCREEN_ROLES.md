@@ -18,3 +18,10 @@ This document gives a simple, one-line description of each Wear OS screen and ac
 - `ReminderScreen`: Renders alert title/body with optional image/video and dismiss controls.
 - `PreNavigationScreen`: Visual warning + countdown + cancel action before navigation.
 - `NavigationScreen`: Direction arrow and distance display for simplified watch navigation.
+
+## Reminder Playback Contract
+
+- Queueing: Reminder playback requests are serialized via `ReminderPlaybackQueueManager`.
+- Launch policy: Reminders launch even if audio/video cache prefetch fails; UI degrades gracefully where possible.
+- Audio-only edge case: If audio cannot be resolved and there is no photo/video fallback, playback is skipped.
+- Finish policy: Audio/video reminders finish on player end/error; timed auto-finish is reserved for photo/text/error fallback flows.

@@ -4,11 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
-import com.example.relapse_watch.domain.model.EventTypes
 import com.example.relapse_watch.domain.model.LocationPoint
-import com.example.relapse_watch.domain.model.SafeZoneEvent
 import com.example.relapse_watch.domain.repository.GeoReminderRepository
-import com.example.relapse_watch.domain.repository.SafeZoneRepository
 import com.example.relapse_watch.data.preferences.WatchPreferences
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofenceStatusCodes
@@ -27,14 +24,11 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
-    @Inject lateinit var safeZoneRepository: SafeZoneRepository
     @Inject lateinit var geoReminderRepository: GeoReminderRepository
     @Inject lateinit var watchPreferences: WatchPreferences
     @Inject lateinit var activityTrackingService: ActivityTrackingService
     @Inject lateinit var wearableCommunicationService: WearableCommunicationService
-    @Inject lateinit var syncService: SyncService
     @Inject lateinit var reminderPlaybackQueueManager: ReminderPlaybackQueueManager
-    @Inject lateinit var notificationService: NotificationService
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -65,7 +59,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                             location = location
                         )
                     } else {
-                        handleSafeZoneGeofence(context, requestId, transition, location)
+                        // Safe zone geofence transitions are handled exclusively
+                        // by MonitoringForegroundService.checkSafeZoneProximity()
+                        // to prevent double-trigger issues.
+                        Log.d(TAG, "Ignoring safe zone geofence transition (handled by MonitoringForegroundService)")
                     }
                 }
             } catch (e: Exception) {
@@ -74,72 +71,6 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 pendingResult.finish()
             }
         }
-    }
-
-    private suspend fun handleSafeZoneGeofence(
-        context: Context,
-        zoneId: String,
-        transition: Int,
-        location: android.location.Location?
-    ) {
-        val eventType = when (transition) {
-            Geofence.GEOFENCE_TRANSITION_EXIT -> EventTypes.SAFE_ZONE_EXIT
-            Geofence.GEOFENCE_TRANSITION_ENTER -> EventTypes.SAFE_ZONE_ENTER
-            else -> return
-        }
-
-        val lat = location?.latitude ?: 0.0
-        val lng = location?.longitude ?: 0.0
-        val timestamp = System.currentTimeMillis()
-
-        val event = SafeZoneEvent(
-            id = UUID.randomUUID().toString(),
-            safeZoneId = zoneId,
-            eventType = eventType,
-            timestamp = timestamp,
-            latitude = lat,
-            longitude = lng
-        )
-        safeZoneRepository.recordEvent(event)
-
-        val point = LocationPoint(lat, lng, timestamp)
-        activityTrackingService.recordSafeZoneEvent(eventType, point)
-
-        val activeZone = safeZoneRepository.getActiveSafeZone().first()
-        val alertsEnabled = (activeZone?.alarmEnabled == true) || (activeZone?.vibrationEnabled == true)
-        if (alertsEnabled) {
-            wearableCommunicationService.sendSafeZoneAlert(eventType, lat, lng)
-        }
-
-        if (eventType == EventTypes.SAFE_ZONE_EXIT) {
-            try {
-                syncService.syncActivityData()
-            } catch (e: Exception) {
-                Log.e(TAG, "Sync failed during safe-zone exit — continuing to navigation", e)
-            }
-
-            // Launch pre-navigation countdown before Google Maps walking navigation.
-            // Use a full-screen intent notification — calling startActivity() from
-            // a BroadcastReceiver background coroutine is blocked on Android 12+.
-            if (activeZone != null) {
-                notificationService.showSafeZoneNavigationNotification(
-                    safeZoneLat = activeZone.centerLat,
-                    safeZoneLng = activeZone.centerLng
-                )
-                Log.d(TAG, "Safe zone navigation notification posted")
-            } else {
-                Log.w(TAG, "Active zone is null — cannot launch navigation")
-            }
-        }
-
-        // When patient re-enters the safe zone, show a prominent alert
-        // so they know to stop Google Maps navigation.
-        if (eventType == EventTypes.SAFE_ZONE_ENTER) {
-            notificationService.showSafeZoneReturnNotification()
-            Log.d(TAG, "Safe zone return notification posted")
-        }
-
-        Log.d(TAG, "Safe zone $eventType for zone: $zoneId")
     }
 
     private suspend fun handleReminderGeofence(
@@ -152,16 +83,24 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         reminderMutex.withLock {
             val reminder = geoReminderRepository.getReminder(reminderId) ?: return@withLock
             val timestamp = System.currentTimeMillis()
+            val correlation = "$reminderId:$timestamp"
             val cooldownMinutes = watchPreferences.reminderCooldownMinutes.first()
             val cooldownMs = cooldownMinutes.coerceAtLeast(0) * 60_000L
 
             val lastTriggeredAt = reminder.lastTriggeredAt ?: 0L
             if ((timestamp - lastTriggeredAt) < cooldownMs) {
-                Log.d(TAG, "Reminder trigger skipped due to cooldown: $reminderId")
+                Log.d(
+                    TAG,
+                    "[REMINDER_TRIGGER][SKIP_COOLDOWN] key=$correlation id=$reminderId now=$timestamp last=$lastTriggeredAt cooldownMs=$cooldownMs remainingMs=${cooldownMs - (timestamp - lastTriggeredAt)}"
+                )
                 return@withLock
             }
 
             geoReminderRepository.markAsTriggered(reminderId, timestamp)
+            Log.d(
+                TAG,
+                "[REMINDER_TRIGGER][MARKED] key=$correlation id=$reminderId triggeredAt=$timestamp prevLast=$lastTriggeredAt cooldownMs=$cooldownMs"
+            )
 
             val lat = location?.latitude ?: reminder.latitude
             val lng = location?.longitude ?: reminder.longitude
@@ -171,12 +110,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             reminderPlaybackQueueManager.enqueue(
                 ReminderPlaybackRequest(
                     reminderId = reminder.id,
+                    triggeredAt = timestamp,
                     title = reminder.title,
                     body = reminder.body,
                     imageUrl = reminder.imageUrl,
                     audioUrl = reminder.audioUrl,
                     videoUrl = reminder.videoUrl
                 )
+            )
+            Log.d(
+                TAG,
+                "[REMINDER_TRIGGER][ENQUEUED] key=$correlation id=${reminder.id} triggeredAt=$timestamp hasAudio=${!reminder.audioUrl.isNullOrBlank()}"
             )
 
             wearableCommunicationService.sendReminderTriggered(reminderId, reminder.title)

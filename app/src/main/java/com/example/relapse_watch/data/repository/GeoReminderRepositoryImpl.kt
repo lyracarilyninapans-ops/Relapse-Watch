@@ -63,23 +63,11 @@ class GeoReminderRepositoryImpl @Inject constructor(
                     val description = data["description"] as? String ?: ""
                     val radiusMeters = (data["radiusMeters"] as? Number)?.toInt() ?: 100
 
-                    // Extract photo and video URLs from mediaItems
-                    val mediaItems = data["mediaItems"] as? List<*>
-                    var imageUrl: String? = null
-                    var audioUrl: String? = null
-                    var videoUrl: String? = null
-                    mediaItems?.forEach { item ->
-                        val mediaMap = item as? Map<*, *> ?: return@forEach
-                        val type = mediaMap["type"] as? String
-                        val cloudUrl = (mediaMap["cloudUrl"] as? String)?.takeIf { it.isNotBlank() }
-                        if (cloudUrl != null) {
-                            when (type) {
-                                "photo" -> if (imageUrl == null) imageUrl = cloudUrl
-                                "audio" -> if (audioUrl == null) audioUrl = cloudUrl
-                                "video" -> if (videoUrl == null) videoUrl = cloudUrl
-                            }
-                        }
-                    }
+                    val (imageUrl, audioUrl, videoUrl) = extractMediaUrls(data)
+                    Log.d(
+                        TAG,
+                        "[REMINDER_SYNC][MEDIA] id=${doc.id} hasImage=${!imageUrl.isNullOrBlank()} hasAudio=${!audioUrl.isNullOrBlank()} hasVideo=${!videoUrl.isNullOrBlank()}"
+                    )
 
                     GeoReminder(
                         id = doc.id,
@@ -138,5 +126,38 @@ class GeoReminderRepositoryImpl @Inject constructor(
 
     companion object {
         private const val TAG = "GeoReminderRepo"
+
+        internal fun extractMediaUrls(data: Map<String, Any>): Triple<String?, String?, String?> {
+            val mediaItems = data["mediaItems"] as? List<*>
+            var imageUrl: String? = null
+            var audioUrl: String? = null
+            var videoUrl: String? = null
+
+            mediaItems?.forEach { item ->
+                val mediaMap = item as? Map<*, *> ?: return@forEach
+                val type = mediaMap["type"] as? String
+                val cloudUrl = (mediaMap["cloudUrl"] as? String)?.takeIf { it.isNotBlank() }
+                if (cloudUrl != null) {
+                    when (type) {
+                        "photo" -> if (imageUrl == null) imageUrl = cloudUrl
+                        "audio" -> if (audioUrl == null) audioUrl = cloudUrl
+                        "video" -> if (videoUrl == null) videoUrl = cloudUrl
+                    }
+                }
+            }
+
+            // Backward compatibility for older reminders that stored direct URLs.
+            if (imageUrl == null) {
+                imageUrl = (data["imageUrl"] as? String)?.takeIf { it.isNotBlank() }
+            }
+            if (audioUrl == null) {
+                audioUrl = (data["audioUrl"] as? String)?.takeIf { it.isNotBlank() }
+            }
+            if (videoUrl == null) {
+                videoUrl = (data["videoUrl"] as? String)?.takeIf { it.isNotBlank() }
+            }
+
+            return Triple(imageUrl, audioUrl, videoUrl)
+        }
     }
 }
