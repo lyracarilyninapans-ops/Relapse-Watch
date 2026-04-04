@@ -206,6 +206,7 @@ class SyncService @Inject constructor(
             geoReminderRepository.syncFromFirestore(caregiverUid, patientId)
             val syncedReminders = geoReminderRepository.getActiveReminders().first()
 
+            // Remove OS geofences for reminders that were deleted on the phone
             val syncedReminderIds = syncedReminders.map { it.id }.toSet()
             existingReminders
                 .filter { it.id !in syncedReminderIds }
@@ -213,6 +214,23 @@ class SyncService @Inject constructor(
                     geofenceService.removeGeofence("reminder_${reminder.id}")
                 }
 
+            // For reminders whose location/radius changed, remove the stale
+            // DataStore key so registerReminder() will re-register them.
+            val existingById = existingReminders.associateBy { it.id }
+            syncedReminders.forEach { reminder ->
+                val old = existingById[reminder.id]
+                if (old != null && (
+                    old.latitude != reminder.latitude ||
+                    old.longitude != reminder.longitude ||
+                    old.radiusMeters != reminder.radiusMeters)) {
+                    // Parameters changed — clear the old persisted key
+                    geofenceService.removeGeofence("reminder_${reminder.id}")
+                }
+            }
+
+            // Register geofences for all synced reminders.
+            // registerReminder() internally skips if the key already
+            // exists in DataStore (unchanged reminders).
             syncedReminders.forEach { reminder ->
                 val registerResult = geofenceService.registerReminder(
                     id = reminder.id,
@@ -247,6 +265,7 @@ class SyncService @Inject constructor(
             Log.e(TAG, "Failed to sync geo-reminders from Firestore", e)
             return false
         }
+
     }
 
     private suspend fun syncReminderCooldownFromFirestore(caregiverUid: String, patientId: String): Boolean {

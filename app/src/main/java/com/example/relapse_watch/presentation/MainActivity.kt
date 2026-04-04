@@ -38,6 +38,16 @@ class MainActivity : ComponentActivity() {
      *  can react and start services. Updated by the permission launcher. */
     private val _locationGranted = mutableStateOf(false)
 
+    private val backgroundLocationLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            Log.d(TAG, "Background location granted — geofencing fully active")
+        } else {
+            Log.w(TAG, "Background location denied — geofencing will suspend when app closes")
+        }
+    }
+
     private val locationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
@@ -45,10 +55,16 @@ class MainActivity : ComponentActivity() {
         val coarseGranted = grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         val locationGranted = fineGranted || coarseGranted
 
+        val notificationGranted = grants[Manifest.permission.POST_NOTIFICATIONS] == true
+        if (!notificationGranted) {
+            Log.w(TAG, "POST_NOTIFICATIONS denied — reminders and alerts will not appear")
+        }
+
         _locationGranted.value = locationGranted
         if (_locationGranted.value) {
             Log.d(TAG, "Location permission granted — starting monitoring")
             startMonitoringServices()
+            requestBackgroundLocationIfNeeded()
         } else {
             Log.w(TAG, "Location permission denied — monitoring/geofencing may not start")
         }
@@ -96,6 +112,7 @@ class MainActivity : ComponentActivity() {
                         if (locationGranted) {
                             startMonitoringServices()
                             mainViewModel.triggerImmediatePostPairingLocationSync()
+                            requestBackgroundLocationIfNeeded()
                         } else {
                             requestLocationPermissions()
                         }
@@ -170,12 +187,24 @@ class MainActivity : ComponentActivity() {
     private fun requestLocationPermissions() {
         val permissions = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.POST_NOTIFICATIONS
         )
 
         locationPermissionLauncher.launch(
             permissions.toTypedArray()
         )
+    }
+
+    private fun requestBackgroundLocationIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val bgGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!bgGranted) {
+                backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+        }
     }
 
     private fun startMonitoringServices() {

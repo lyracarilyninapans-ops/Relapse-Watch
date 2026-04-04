@@ -28,7 +28,7 @@ class LocationService @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun getLocationUpdates(intervalMs: Long = 300_000L): Flow<LocationPoint> = callbackFlow {
-        val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, intervalMs)
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
             .setMinUpdateIntervalMillis(intervalMs / 2)
             .build()
 

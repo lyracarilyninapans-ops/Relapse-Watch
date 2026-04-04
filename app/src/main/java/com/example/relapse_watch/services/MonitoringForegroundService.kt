@@ -12,7 +12,10 @@ import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.example.relapse_watch.R
+import com.example.relapse_watch.data.preferences.WatchPreferences
 import com.example.relapse_watch.domain.model.EventTypes
+import com.example.relapse_watch.domain.model.LocationPoint
+import com.example.relapse_watch.domain.repository.GeoReminderRepository
 import com.example.relapse_watch.presentation.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Job
@@ -27,9 +30,17 @@ class MonitoringForegroundService : LifecycleService() {
 
     @Inject lateinit var activityTrackingService: ActivityTrackingService
     @Inject lateinit var syncService: SyncService
+    @Inject lateinit var locationService: LocationService
+    @Inject lateinit var geoReminderRepository: GeoReminderRepository
+    @Inject lateinit var watchPreferences: WatchPreferences
+    @Inject lateinit var reminderPlaybackQueueManager: ReminderPlaybackQueueManager
+    @Inject lateinit var wearableCommunicationService: WearableCommunicationService
+    @Inject lateinit var notificationService: NotificationService
+    @Inject lateinit var safeZoneRepository: com.example.relapse_watch.domain.repository.SafeZoneRepository
 
     private var trackingJob: Job? = null
     private var syncJob: Job? = null
+    private var isInsideSafeZone: Boolean? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -71,9 +82,130 @@ class MonitoringForegroundService : LifecycleService() {
                 .collect { locationPoint ->
                     activityTrackingService.recordLocationUpdate(locationPoint)
                     activityTrackingService.updateDailySummary()
+
+                    // Software-based proximity check — more reliable than
+                    // the Android Geofencing API on Wear OS where aggressive
+                    // battery optimization often delays or drops transitions.
+                    checkReminderProximity(locationPoint)
+                    checkSafeZoneProximity(locationPoint)
                 }
         }
-        Log.d(TAG, "Location tracking started")
+        Log.d(TAG, "Location tracking started (with proximity checking)")
+    }
+
+    /**
+     * On every location update, check if the patient is inside any active
+     * reminder zone. If so, trigger the reminder using the same cooldown
+     * and playback queue logic as the geofence BroadcastReceiver.
+     *
+     * This is the primary trigger mechanism — the Geofencing API serves
+     * as a secondary backup that can fire between polling intervals.
+     */
+    private suspend fun checkReminderProximity(location: LocationPoint) {
+        try {
+            val reminders = geoReminderRepository.getActiveReminders().first()
+            if (reminders.isEmpty()) return
+
+            val cooldownMinutes = watchPreferences.reminderCooldownMinutes.first()
+            val cooldownMs = cooldownMinutes.coerceAtLeast(0) * 60_000L
+            val now = System.currentTimeMillis()
+
+            for (reminder in reminders) {
+                val reminderCenter = LocationPoint(
+                    latitude = reminder.latitude,
+                    longitude = reminder.longitude,
+                    timestamp = now
+                )
+                val distance = locationService.calculateDistance(location, reminderCenter)
+
+                if (distance <= reminder.radiusMeters) {
+                    // Patient is inside this reminder zone
+                    val lastTriggeredAt = reminder.lastTriggeredAt ?: 0L
+                    if ((now - lastTriggeredAt) < cooldownMs) {
+                        // Still in cooldown — skip
+                        continue
+                    }
+
+                    Log.d(TAG, "Proximity trigger: ${reminder.title} (${reminder.id}), distance=${distance}m")
+
+                    // Mark as triggered (same as geofence path)
+                    geoReminderRepository.markAsTriggered(reminder.id, now)
+
+                    // Record activity event
+                    activityTrackingService.recordReminderTriggered(reminder.id, location)
+
+                    // Enqueue for playback via full-screen notification
+                    reminderPlaybackQueueManager.enqueue(
+                        ReminderPlaybackRequest(
+                            reminderId = reminder.id,
+                            title = reminder.title,
+                            body = reminder.body,
+                            imageUrl = reminder.imageUrl,
+                            audioUrl = reminder.audioUrl,
+                            videoUrl = reminder.videoUrl
+                        )
+                    )
+
+                    // Notify the phone
+                    wearableCommunicationService.sendReminderTriggered(
+                        reminder.id, reminder.title
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Proximity check failed", e)
+        }
+    }
+
+    private suspend fun checkSafeZoneProximity(location: LocationPoint) {
+        try {
+            val activeZone = safeZoneRepository.getActiveSafeZone().first()
+            if (activeZone == null || !activeZone.isActive) return
+
+            val safeZoneCenter = LocationPoint(
+                latitude = activeZone.centerLat,
+                longitude = activeZone.centerLng,
+                timestamp = location.timestamp
+            )
+            val distance = locationService.calculateDistance(location, safeZoneCenter)
+            val currentlyInside = distance <= activeZone.radiusMeters
+
+            if (isInsideSafeZone != null && isInsideSafeZone != currentlyInside) {
+                val eventType = if (currentlyInside) EventTypes.SAFE_ZONE_ENTER else EventTypes.SAFE_ZONE_EXIT
+                val event = com.example.relapse_watch.domain.model.SafeZoneEvent(
+                    id = java.util.UUID.randomUUID().toString(),
+                    safeZoneId = activeZone.id,
+                    eventType = eventType,
+                    timestamp = location.timestamp,
+                    latitude = location.latitude,
+                    longitude = location.longitude
+                )
+                safeZoneRepository.recordEvent(event)
+                activityTrackingService.recordSafeZoneEvent(eventType, location)
+
+                val alertsEnabled = activeZone.alarmEnabled || activeZone.vibrationEnabled
+                if (alertsEnabled) {
+                    wearableCommunicationService.sendSafeZoneAlert(eventType, location.latitude, location.longitude)
+                }
+
+                if (eventType == EventTypes.SAFE_ZONE_EXIT) {
+                    try {
+                        syncService.syncActivityData()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Sync failed during proximity safe-zone exit", e)
+                    }
+                    notificationService.showSafeZoneNavigationNotification(activeZone.centerLat, activeZone.centerLng)
+                    Log.d(TAG, "Proximity trigger: Safe zone exit notification posted")
+                } else {
+                    notificationService.showSafeZoneReturnNotification()
+                    Log.d(TAG, "Proximity trigger: Safe zone return notification posted")
+                }
+            }
+
+            isInsideSafeZone = currentlyInside
+        } catch (e: Exception) {
+            Log.e(TAG, "Proximity check for safe zone failed", e)
+        }
     }
 
     private fun startPeriodicSync() {

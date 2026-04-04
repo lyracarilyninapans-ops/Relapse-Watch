@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -26,6 +27,7 @@ class WatchPreferences @Inject constructor(
         val LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
         val SAFE_ZONE_RADIUS_METERS = intPreferencesKey("safe_zone_radius_meters")
         val REMINDER_COOLDOWN_MINUTES = intPreferencesKey("reminder_cooldown_minutes")
+        val REGISTERED_GEOFENCE_KEYS = stringSetPreferencesKey("registered_geofence_keys")
     }
 
     val isPaired: Flow<Boolean> = dataStore.data.map { it[IS_PAIRED] ?: false }
@@ -37,6 +39,7 @@ class WatchPreferences @Inject constructor(
     val lastSyncTimestamp: Flow<Long> = dataStore.data.map { it[LAST_SYNC_TIMESTAMP] ?: 0L }
     val safeZoneRadiusMeters: Flow<Int> = dataStore.data.map { it[SAFE_ZONE_RADIUS_METERS] ?: 0 }
     val reminderCooldownMinutes: Flow<Int> = dataStore.data.map { it[REMINDER_COOLDOWN_MINUTES] ?: 30 }
+    val registeredGeofenceKeys: Flow<Set<String>> = dataStore.data.map { it[REGISTERED_GEOFENCE_KEYS] ?: emptySet() }
 
     suspend fun setPaired(isPaired: Boolean, caregiverUid: String, watchId: String) {
         dataStore.edit { prefs ->
@@ -85,6 +88,26 @@ class WatchPreferences @Inject constructor(
     suspend fun setReminderCooldownMinutes(minutes: Int) {
         dataStore.edit { prefs ->
             prefs[REMINDER_COOLDOWN_MINUTES] = minutes
+        }
+    }
+
+    suspend fun addRegisteredGeofenceKey(key: String) {
+        dataStore.edit { prefs ->
+            val current = prefs[REGISTERED_GEOFENCE_KEYS] ?: emptySet()
+            prefs[REGISTERED_GEOFENCE_KEYS] = current + key
+        }
+    }
+
+    suspend fun removeRegisteredGeofenceKeysStartingWith(prefix: String) {
+        dataStore.edit { prefs ->
+            val current = prefs[REGISTERED_GEOFENCE_KEYS] ?: emptySet()
+            prefs[REGISTERED_GEOFENCE_KEYS] = current.filterNot { it.startsWith(prefix) }.toSet()
+        }
+    }
+
+    suspend fun clearRegisteredGeofenceKeys() {
+        dataStore.edit { prefs ->
+            prefs[REGISTERED_GEOFENCE_KEYS] = emptySet()
         }
     }
 }
