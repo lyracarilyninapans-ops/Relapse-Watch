@@ -15,4 +15,7 @@ interface DailySummaryDao {
 
     @Query("SELECT * FROM daily_summaries WHERE date = :date")
     fun getSummaryForDate(date: String): Flow<DailySummaryEntity?>
+
+    @Query("DELETE FROM daily_summaries")
+    suspend fun deleteAll()
 }

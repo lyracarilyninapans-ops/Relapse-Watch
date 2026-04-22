@@ -19,6 +19,9 @@ interface ActivityRecordDao {
     @Query("SELECT * FROM activity_records WHERE uploaded = 0 ORDER BY timestamp ASC")
     suspend fun getPendingUpload(): List<ActivityRecordEntity>
 
+    @Query("SELECT * FROM activity_records WHERE uploaded = 0 AND patientId = :patientId ORDER BY timestamp ASC")
+    suspend fun getPendingUploadForPatient(patientId: String): List<ActivityRecordEntity>
+
     @Query("SELECT * FROM activity_records WHERE timestamp BETWEEN :start AND :end ORDER BY timestamp DESC")
     fun getRecordsByDateRange(start: Long, end: Long): Flow<List<ActivityRecordEntity>>
 
@@ -30,4 +33,7 @@ interface ActivityRecordDao {
 
     @Query("DELETE FROM activity_records WHERE timestamp < :cutoffTimestamp")
     suspend fun deleteOlderThan(cutoffTimestamp: Long)
+
+    @Query("DELETE FROM activity_records")
+    suspend fun deleteAll()
 }

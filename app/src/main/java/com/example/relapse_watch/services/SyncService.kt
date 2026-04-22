@@ -90,7 +90,7 @@ class SyncService @Inject constructor(
                 Log.w(TAG, "Cloud config sync incomplete")
             }
 
-            val pendingRecords = activityRecordDao.getPendingUpload()
+            val pendingRecords = activityRecordDao.getPendingUploadForPatient(patientId)
             if (pendingRecords.isEmpty()) {
                 Log.d(TAG, "No pending records to sync (heartbeat sent)")
                 if (remindersSyncResult.isFailure) {

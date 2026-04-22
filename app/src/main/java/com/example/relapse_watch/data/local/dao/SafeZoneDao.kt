@@ -23,6 +23,9 @@ interface SafeZoneDao {
     @Query("DELETE FROM safe_zones")
     suspend fun deleteAll()
 
+    @Query("DELETE FROM safe_zone_events")
+    suspend fun deleteAllEvents()
+
     @Query("UPDATE safe_zones SET isActive = 0")
     suspend fun clearActiveZone()
 

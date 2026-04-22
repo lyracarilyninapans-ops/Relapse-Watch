@@ -71,7 +71,7 @@ class SyncServiceTest {
 
         assertTrue(result.isSuccess)
         assertEquals(0, result.getOrNull())
-        verify(activityRecordDao, never()).getPendingUpload()
+        verify(activityRecordDao, never()).getPendingUploadForPatient(any())
     }
 
     @Test
@@ -80,7 +80,7 @@ class SyncServiceTest {
         whenever(preferences.caregiverUid).thenReturn(flowOf("uid123"))
         whenever(preferences.patientId).thenReturn(flowOf("patient123"))
         whenever(preferences.watchId).thenReturn(flowOf("watch1"))
-        whenever(activityRecordDao.getPendingUpload()).thenReturn(emptyList())
+        whenever(activityRecordDao.getPendingUploadForPatient(any())).thenReturn(emptyList())
         whenever(geoReminderRepository.syncFromFirestore(any(), any())).thenReturn(Result.success(Unit))
         whenever(firestoreActivitySource.updateWatchStatus(any(), any(), any(), any())).thenReturn(Result.success(Unit))
 
@@ -96,7 +96,7 @@ class SyncServiceTest {
         whenever(preferences.caregiverUid).thenReturn(flowOf("uid123"))
         whenever(preferences.patientId).thenReturn(flowOf("patient123"))
         whenever(preferences.watchId).thenReturn(flowOf("watch1"))
-        whenever(activityRecordDao.getPendingUpload()).thenReturn(emptyList())
+        whenever(activityRecordDao.getPendingUploadForPatient(any())).thenReturn(emptyList())
         whenever(geoReminderRepository.syncFromFirestore(any(), any())).thenReturn(Result.success(Unit))
         whenever(firestoreActivitySource.updateWatchStatus(any(), any(), any(), any())).thenReturn(Result.success(Unit))
         whenever(batteryStatusProvider.getBatteryLevelPercent()).thenReturn(64)
@@ -124,7 +124,7 @@ class SyncServiceTest {
             ActivityRecordEntity("id1", "patient123", 1000L, 1.0, 2.0, "location_update", null, false),
             ActivityRecordEntity("id2", "patient123", 2000L, 1.1, 2.1, "location_update", null, false)
         )
-        whenever(activityRecordDao.getPendingUpload()).thenReturn(records)
+        whenever(activityRecordDao.getPendingUploadForPatient(any())).thenReturn(records)
         whenever(firestoreActivitySource.uploadActivityRecords(any(), any(), any())).thenReturn(Result.success(Unit))
         whenever(firestoreActivitySource.updateWatchStatus(any(), any(), any(), any())).thenReturn(Result.success(Unit))
 
@@ -147,7 +147,7 @@ class SyncServiceTest {
         val records = listOf(
             ActivityRecordEntity("id1", "patient123", 1000L, 1.0, 2.0, "location_update", null, false)
         )
-        whenever(activityRecordDao.getPendingUpload()).thenReturn(records)
+        whenever(activityRecordDao.getPendingUploadForPatient(any())).thenReturn(records)
         whenever(firestoreActivitySource.uploadActivityRecords(any(), any(), any()))
             .thenReturn(Result.failure(Exception("Network error")))
 
@@ -163,7 +163,7 @@ class SyncServiceTest {
         whenever(preferences.caregiverUid).thenReturn(flowOf("uid123"))
         whenever(preferences.patientId).thenReturn(flowOf("patient123"))
         whenever(preferences.watchId).thenReturn(flowOf("watch1"))
-        whenever(activityRecordDao.getPendingUpload()).thenReturn(emptyList())
+        whenever(activityRecordDao.getPendingUploadForPatient(any())).thenReturn(emptyList())
         whenever(firestoreActivitySource.updateWatchStatus(any(), any(), any(), any())).thenReturn(Result.success(Unit))
         whenever(geoReminderRepository.syncFromFirestore(any(), any()))
             .thenReturn(Result.failure(Exception("Reminder sync failed")))
@@ -185,7 +185,7 @@ class SyncServiceTest {
         val records = listOf(
             ActivityRecordEntity("id1", "patient123", 1000L, 1.0, 2.0, "location_update", null, false)
         )
-        whenever(activityRecordDao.getPendingUpload()).thenReturn(records)
+        whenever(activityRecordDao.getPendingUploadForPatient(any())).thenReturn(records)
 
         val uploadStarted = CountDownLatch(1)
         val allowUploadFinish = CountDownLatch(1)
@@ -215,7 +215,7 @@ class SyncServiceTest {
         whenever(preferences.caregiverUid).thenReturn(flowOf("uid123"))
         whenever(preferences.patientId).thenReturn(flowOf("patient123"))
         whenever(preferences.watchId).thenReturn(flowOf("watch1"))
-        whenever(activityRecordDao.getPendingUpload()).thenReturn(emptyList())
+        whenever(activityRecordDao.getPendingUploadForPatient(any())).thenReturn(emptyList())
         whenever(firestoreActivitySource.updateWatchStatus(any(), any(), any(), any())).thenReturn(Result.success(Unit))
         whenever(geoReminderRepository.syncFromFirestore(any(), any())).thenReturn(Result.success(Unit))
         whenever(firestoreActivitySource.getActiveSafeZone(any(), any())).thenReturn(null)
@@ -248,7 +248,7 @@ class SyncServiceTest {
         whenever(preferences.caregiverUid).thenReturn(flowOf("uid123"))
         whenever(preferences.patientId).thenReturn(flowOf("patient123"))
         whenever(preferences.watchId).thenReturn(flowOf("watch1"))
-        whenever(activityRecordDao.getPendingUpload()).thenReturn(emptyList())
+        whenever(activityRecordDao.getPendingUploadForPatient(any())).thenReturn(emptyList())
         whenever(firestoreActivitySource.updateWatchStatus(any(), any(), any(), any())).thenReturn(Result.success(Unit))
         whenever(geoReminderRepository.syncFromFirestore(any(), any())).thenReturn(Result.success(Unit))
         whenever(firestoreActivitySource.getActiveSafeZone(any(), any())).thenReturn(null)

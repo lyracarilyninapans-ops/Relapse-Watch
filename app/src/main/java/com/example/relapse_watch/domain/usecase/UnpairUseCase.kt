@@ -2,6 +2,8 @@ package com.example.relapse_watch.domain.usecase
 
 import android.content.Context
 import android.util.Log
+import androidx.room.withTransaction
+import com.example.relapse_watch.data.local.RelapseWatchDatabase
 import com.example.relapse_watch.data.preferences.WatchPreferences
 import com.example.relapse_watch.domain.repository.PairingRepository
 import com.example.relapse_watch.domain.repository.SafeZoneRepository
@@ -30,6 +32,7 @@ class UnpairUseCase @Inject constructor(
     private val geofenceService: GeofenceService,
     private val syncScheduler: SyncScheduler,
     private val preferences: WatchPreferences,
+    private val database: RelapseWatchDatabase,
     @ApplicationContext private val context: Context
 ) {
 
@@ -105,6 +108,20 @@ class UnpairUseCase @Inject constructor(
                 preferences.clearInsideSafeZone()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to clear local safe-zone state", e)
+            }
+
+            // 8. Purge user-linked Room data so watch reuse under a different
+            // account cannot leak stale activity/summaries/events/reminders.
+            try {
+                database.withTransaction {
+                    database.activityRecordDao().deleteAll()
+                    database.dailySummaryDao().deleteAll()
+                    database.safeZoneDao().deleteAllEvents()
+                    database.safeZoneDao().deleteAll()
+                    database.geoReminderDao().deleteAll()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to clear local Room data", e)
             }
 
             Log.d(TAG, "Unpair cleanup complete (notifiedPhone=$alsoNotifyPhone)")
