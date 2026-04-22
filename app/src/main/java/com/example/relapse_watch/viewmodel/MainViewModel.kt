@@ -1,5 +1,6 @@
 package com.example.relapse_watch.viewmodel
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.relapse_watch.data.preferences.WatchPreferences
@@ -17,14 +18,15 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -43,6 +45,8 @@ class MainViewModel @Inject constructor(
 
     private val _safeZoneStatus = MutableStateFlow(SafeZoneStatus.Unknown)
     val safeZoneStatus: StateFlow<SafeZoneStatus> = _safeZoneStatus
+    private var unpairHandledForCurrentSession = false
+    private var wasPairedForUnpairGuard = false
 
     // Safe zone navigation/return triggers are handled exclusively by
     // MonitoringForegroundService.checkSafeZoneProximity() — the single
@@ -62,19 +66,45 @@ class MainViewModel @Inject constructor(
                 preferences.caregiverUid
             ) { paired, code, uid ->
                 Triple(paired, code, uid)
-            }.collectLatest { (paired, code, uid) ->
+            }
+                .distinctUntilChanged()
+                .collectLatest { (paired, code, uid) ->
+                if (paired && !wasPairedForUnpairGuard) {
+                    // New paired session: allow exactly one remote unpair handling.
+                    unpairHandledForCurrentSession = false
+                }
+                if (!paired) {
+                    unpairHandledForCurrentSession = false
+                }
+                wasPairedForUnpairGuard = paired
+
                 if (paired) {
                     val signals = buildList {
                         if (code.isNotBlank()) {
-                            add(pairingRepository.observeRemoteUnpairCommand(code))
+                            add(
+                                pairingRepository.observeRemoteUnpairCommand(code)
+                                    .distinctUntilChanged()
+                            )
                         }
                         if (uid.isNotBlank()) {
-                            add(pairingRepository.observeCaregiverUnpairCommand(uid))
+                            add(
+                                pairingRepository.observeCaregiverUnpairCommand(uid)
+                                    .distinctUntilChanged()
+                            )
                         }
                     }
                     if (signals.isNotEmpty()) {
                         merge(*signals.toTypedArray()).collect { isUnpaired ->
-                            if (isUnpaired) {
+                            if (isUnpaired && !unpairHandledForCurrentSession) {
+                                val confirmed = pairingRepository.confirmRemoteUnpairFromServer(
+                                    pairingCode = code,
+                                    caregiverUid = uid
+                                )
+                                if (!confirmed) {
+                                    // Ignore stale/cached unpair signals when server state is no longer unpaired.
+                                    return@collect
+                                }
+                                unpairHandledForCurrentSession = true
                                 // Phone already updated its own Firestore doc,
                                 // so we only need local + shared cleanup.
                                 unpairUseCase.execute(alsoNotifyPhone = false)
@@ -83,6 +113,46 @@ class MainViewModel @Inject constructor(
                     }
                 }
             }
+        }
+
+        // Fallback reconciliation: periodically verify server-side pairing
+        // status while locally paired. This catches missed realtime listener
+        // events and ensures phone-initiated unpair eventually applies.
+        viewModelScope.launch {
+            combine(
+                preferences.isPaired,
+                preferences.pairingCode,
+                preferences.caregiverUid
+            ) { paired, code, uid -> Triple(paired, code, uid) }
+                .distinctUntilChanged()
+                .collectLatest { (paired, code, uid) ->
+                    if (!paired) {
+                        unpairHandledForCurrentSession = false
+                        Log.d(TAG, "VM_UNPAIR_RECONCILE_STATE paired=false resetHandled=true")
+                        return@collectLatest
+                    }
+
+                    Log.d(
+                        TAG,
+                        "VM_UNPAIR_RECONCILE_STATE paired=true handled=$unpairHandledForCurrentSession codePresent=${code.isNotBlank()} uidPresent=${uid.isNotBlank()}"
+                    )
+
+                    while (true) {
+                        if (!unpairHandledForCurrentSession) {
+                            val confirmed = pairingRepository.confirmRemoteUnpairFromServer(
+                                pairingCode = code,
+                                caregiverUid = uid
+                            )
+                            Log.d(TAG, "VM_UNPAIR_RECONCILE_CHECK confirmed=$confirmed")
+                            if (confirmed) {
+                                unpairHandledForCurrentSession = true
+                                Log.d(TAG, "VM_UNPAIR_RECONCILE_CONFIRMED")
+                                unpairUseCase.execute(alsoNotifyPhone = false)
+                            }
+                        }
+                        delay(20_000L)
+                    }
+                }
         }
 
         // Keep local pairing cache continuously aligned with remote pairing data.
@@ -182,32 +252,39 @@ class MainViewModel @Inject constructor(
         // screen-off and backgrounding (see startRealtimeListeners()).
 
         viewModelScope.launch {
-            safeZoneRepository.getActiveSafeZone().collectLatest { zone ->
-                if (zone == null || !zone.isActive) {
-                    _safeZoneStatus.value = SafeZoneStatus.Unknown
-                    return@collectLatest
-                }
-
-                locationService.getLocationUpdates(intervalMs = 10_000L)
-                    .catch {
-                        _safeZoneStatus.value = SafeZoneStatus.Unknown
-                    }
-                    .collect { location ->
-                        val safeZoneCenter = LocationPoint(
-                            latitude = zone.centerLat,
-                            longitude = zone.centerLng,
-                            timestamp = location.timestamp
-                        )
-                        val distance = locationService.calculateDistance(location, safeZoneCenter)
-                        val previousStatus = _safeZoneStatus.value
-                        val newStatus = if (distance <= zone.radiusMeters) {
-                            SafeZoneStatus.Inside
-                        } else {
-                            SafeZoneStatus.Outside
-                        }
-                        _safeZoneStatus.value = newStatus
-                    }
+            combine(
+                preferences.isInsideSafeZone,
+                safeZoneRepository.getActiveSafeZone(),
+                activityRepository.getLatestRecord()
+            ) { persistedInside, zone, latestRecord ->
+                Triple(persistedInside, zone, latestRecord)
             }
+                .collectLatest { (persistedInside, zone, latestRecord) ->
+                    _safeZoneStatus.value = when {
+                        zone == null || !zone.isActive -> SafeZoneStatus.Unknown
+                        persistedInside == true -> SafeZoneStatus.Inside
+                        persistedInside == false -> SafeZoneStatus.Outside
+                        latestRecord == null -> SafeZoneStatus.Unknown
+                        else -> {
+                            val latestPoint = LocationPoint(
+                                latitude = latestRecord.latitude,
+                                longitude = latestRecord.longitude,
+                                timestamp = latestRecord.timestamp
+                            )
+                            val safeZoneCenter = LocationPoint(
+                                latitude = zone.centerLat,
+                                longitude = zone.centerLng,
+                                timestamp = latestRecord.timestamp
+                            )
+                            val distance = locationService.calculateDistance(latestPoint, safeZoneCenter)
+                            if (distance <= zone.radiusMeters) {
+                                SafeZoneStatus.Inside
+                            } else {
+                                SafeZoneStatus.Outside
+                            }
+                        }
+                    }
+                }
         }
     }
 
@@ -241,7 +318,7 @@ class MainViewModel @Inject constructor(
                 val location = locationService.getLastKnownLocation()
                 if (location != null) {
                     activityTrackingService.recordLocationUpdate(location)
-                    activityTrackingService.updateDailySummary()
+                    activityTrackingService.updateDailySummaryWithLocation(location)
                 }
                 syncService.syncActivityData()
             } catch (_: Exception) {
@@ -252,5 +329,9 @@ class MainViewModel @Inject constructor(
 
     fun resetImmediatePairingLocationFlag() {
         immediatePairingLocationSent = false
+    }
+
+    companion object {
+        private const val TAG = "MainViewModel"
     }
 }

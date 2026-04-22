@@ -2,6 +2,7 @@ package com.example.relapse_watch.data.preferences
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -17,6 +18,8 @@ import javax.inject.Singleton
 class WatchPreferences @Inject constructor(
     private val dataStore: DataStore<Preferences>
 ) {
+    private val sensitiveValueCipher = SensitiveValueCipher()
+
     private companion object {
         val IS_PAIRED = booleanPreferencesKey("is_paired")
         val PAIRING_CODE = stringPreferencesKey("pairing_code")
@@ -32,11 +35,11 @@ class WatchPreferences @Inject constructor(
     }
 
     val isPaired: Flow<Boolean> = dataStore.data.map { it[IS_PAIRED] ?: false }
-    val pairingCode: Flow<String> = dataStore.data.map { it[PAIRING_CODE] ?: "" }
-    val caregiverUid: Flow<String> = dataStore.data.map { it[CAREGIVER_UID] ?: "" }
-    val watchId: Flow<String> = dataStore.data.map { it[WATCH_ID] ?: "" }
-    val patientName: Flow<String> = dataStore.data.map { it[PATIENT_NAME] ?: "" }
-    val patientId: Flow<String> = dataStore.data.map { it[PATIENT_ID] ?: "" }
+    val pairingCode: Flow<String> = dataStore.data.map { decodeSensitive(it[PAIRING_CODE]) }
+    val caregiverUid: Flow<String> = dataStore.data.map { decodeSensitive(it[CAREGIVER_UID]) }
+    val watchId: Flow<String> = dataStore.data.map { decodeSensitive(it[WATCH_ID]) }
+    val patientName: Flow<String> = dataStore.data.map { decodeSensitive(it[PATIENT_NAME]) }
+    val patientId: Flow<String> = dataStore.data.map { decodeSensitive(it[PATIENT_ID]) }
     val lastSyncTimestamp: Flow<Long> = dataStore.data.map { it[LAST_SYNC_TIMESTAMP] ?: 0L }
     val safeZoneRadiusMeters: Flow<Int> = dataStore.data.map { it[SAFE_ZONE_RADIUS_METERS] ?: 0 }
     val reminderCooldownMinutes: Flow<Int> = dataStore.data.map { it[REMINDER_COOLDOWN_MINUTES] ?: 30 }
@@ -53,8 +56,8 @@ class WatchPreferences @Inject constructor(
     suspend fun setPaired(isPaired: Boolean, caregiverUid: String, watchId: String) {
         dataStore.edit { prefs ->
             prefs[IS_PAIRED] = isPaired
-            prefs[CAREGIVER_UID] = caregiverUid
-            prefs[WATCH_ID] = watchId
+            prefs[CAREGIVER_UID] = encodeSensitive(caregiverUid)
+            prefs[WATCH_ID] = encodeSensitive(watchId)
         }
     }
 
@@ -77,14 +80,24 @@ class WatchPreferences @Inject constructor(
 
     suspend fun setPatientInfo(name: String, id: String) {
         dataStore.edit { prefs ->
-            prefs[PATIENT_NAME] = name
-            prefs[PATIENT_ID] = id
+            prefs[PATIENT_NAME] = encodeSensitive(name)
+            prefs[PATIENT_ID] = encodeSensitive(id)
         }
     }
 
     suspend fun setPairingCode(code: String) {
         dataStore.edit { prefs ->
-            prefs[PAIRING_CODE] = code
+            prefs[PAIRING_CODE] = encodeSensitive(code)
+        }
+    }
+
+    suspend fun migrateSensitiveValuesIfNeeded() {
+        dataStore.edit { prefs ->
+            migrateSensitiveValue(prefs, PAIRING_CODE)
+            migrateSensitiveValue(prefs, CAREGIVER_UID)
+            migrateSensitiveValue(prefs, WATCH_ID)
+            migrateSensitiveValue(prefs, PATIENT_NAME)
+            migrateSensitiveValue(prefs, PATIENT_ID)
         }
     }
 
@@ -130,5 +143,21 @@ class WatchPreferences @Inject constructor(
         dataStore.edit { prefs ->
             prefs.remove(IS_INSIDE_SAFE_ZONE)
         }
+    }
+
+    private fun encodeSensitive(raw: String): String {
+        if (raw.isBlank()) return ""
+        return sensitiveValueCipher.encrypt(raw)
+    }
+
+    private fun decodeSensitive(raw: String?): String {
+        if (raw.isNullOrBlank()) return ""
+        return sensitiveValueCipher.decrypt(raw)
+    }
+
+    private fun migrateSensitiveValue(prefs: MutablePreferences, key: Preferences.Key<String>) {
+        val current = prefs[key] ?: return
+        if (current.isBlank() || sensitiveValueCipher.isEncrypted(current)) return
+        prefs[key] = sensitiveValueCipher.encrypt(current)
     }
 }

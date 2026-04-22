@@ -7,7 +7,15 @@ import com.example.relapse_watch.domain.repository.ActivityRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -15,6 +23,8 @@ import javax.inject.Singleton
 class ActivityRepositoryImpl @Inject constructor(
     private val dao: ActivityRecordDao
 ) : ActivityRepository {
+
+    private val json = Json
 
     override suspend fun insertRecord(record: ActivityRecord) {
         dao.insert(record.toEntity())
@@ -55,7 +65,7 @@ class ActivityRepositoryImpl @Inject constructor(
             latitude = latitude,
             longitude = longitude,
             eventType = eventType,
-            metadataJson = metadata?.let { Json.encodeToString(it.mapValues { (_, v) -> v.toString() }) },
+            metadataJson = metadata?.let { encodeMetadata(it) },
             uploaded = uploaded
         )
     }
@@ -70,12 +80,71 @@ class ActivityRepositoryImpl @Inject constructor(
             eventType = eventType,
             metadata = metadataJson?.let {
                 try {
-                    Json.decodeFromString<Map<String, String>>(it)
+                    decodeMetadata(it)
                 } catch (_: Exception) {
                     null
                 }
             },
             uploaded = uploaded
         )
+    }
+
+    private fun encodeMetadata(metadata: Map<String, Any>): String {
+        val asJsonElements = metadata.mapValues { (_, value) -> value.toJsonElement() }
+        return json.encodeToString(
+            MapSerializer(String.serializer(), JsonElement.serializer()),
+            asJsonElements
+        )
+    }
+
+    private fun decodeMetadata(raw: String): Map<String, Any> {
+        val decoded = json.decodeFromString(
+            MapSerializer(String.serializer(), JsonElement.serializer()),
+            raw
+        )
+        return decoded.mapValues { (_, element) -> element.toNativeValue() }
+    }
+
+    private fun JsonElement.toNativeValue(): Any {
+        return when (this) {
+            is JsonObject -> this.mapValues { (_, value) -> value.toNativeValue() }
+            is JsonArray -> this.map { it.toNativeValue() }
+            is JsonPrimitive -> {
+                when {
+                    isString -> content
+                    content.equals("true", ignoreCase = true) -> true
+                    content.equals("false", ignoreCase = true) -> false
+                    content.toLongOrNull() != null -> content.toLong()
+                    content.toDoubleOrNull() != null -> content.toDouble()
+                    else -> content
+                }
+            }
+        }
+    }
+
+    private fun Any.toJsonElement(): JsonElement {
+        return when (this) {
+            is JsonElement -> this
+            is String -> JsonPrimitive(this)
+            is Number -> JsonPrimitive(this)
+            is Boolean -> JsonPrimitive(this)
+            is Map<*, *> -> {
+                buildJsonObject {
+                    this@toJsonElement.forEach { (key, value) ->
+                        if (key is String && value != null) {
+                            put(key, value.toJsonElement())
+                        }
+                    }
+                }
+            }
+            is List<*> -> {
+                buildJsonArray {
+                    this@toJsonElement.forEach { item ->
+                        if (item != null) add(item.toJsonElement())
+                    }
+                }
+            }
+            else -> JsonPrimitive(this.toString())
+        }
     }
 }

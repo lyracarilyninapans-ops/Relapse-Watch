@@ -1,5 +1,6 @@
 package com.example.relapse_watch.data.repository
 
+import android.util.Log
 import com.example.relapse_watch.data.preferences.WatchPreferences
 import com.example.relapse_watch.data.remote.FirestorePairingSource
 import com.example.relapse_watch.domain.model.PairingState
@@ -80,7 +81,30 @@ class PairingRepositoryImpl @Inject constructor(
             .map { status -> status == "unpaired" }
     }
 
+    override suspend fun confirmRemoteUnpairFromServer(pairingCode: String, caregiverUid: String): Boolean {
+        return try {
+            val codeStatus = firestorePairingSource.fetchPairingCodeStatusFromServer(pairingCode)
+            if (codeStatus == "unpaired") {
+                Log.d(TAG, "SERVER_UNPAIR_CONFIRM codeStatus=unpaired codePresent=${pairingCode.isNotBlank()}")
+                return true
+            }
+
+            val caregiverStatus = firestorePairingSource.fetchCaregiverPairingStatusFromServer(caregiverUid)
+            val confirmed = caregiverStatus == "unpaired"
+            Log.d(
+                TAG,
+                "SERVER_UNPAIR_CONFIRM codeStatus=${codeStatus ?: "null"} caregiverStatus=${caregiverStatus ?: "null"} confirmed=$confirmed codePresent=${pairingCode.isNotBlank()} uidPresent=${caregiverUid.isNotBlank()}"
+            )
+            confirmed
+        } catch (e: Exception) {
+            Log.w(TAG, "SERVER_UNPAIR_CONFIRM failed", e)
+            false
+        }
+    }
+
     override fun observePatientDocument(caregiverUid: String, patientId: String): Flow<Map<String, Any>?> {
         return firestorePairingSource.observePatientDocument(caregiverUid, patientId)
     }
 }
+
+private const val TAG = "PairingRepository"

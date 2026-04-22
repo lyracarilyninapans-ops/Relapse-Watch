@@ -11,6 +11,7 @@ import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -79,5 +80,35 @@ class ActivityRepositoryImplTest {
         repository.deleteOlderThan(7)
 
         verify(dao).deleteOlderThan(any())
+    }
+
+    @Test
+    fun `insertRecord preserves metadata value types`() = runTest {
+        val metadata = mapOf<String, Any>(
+            "accuracy" to 12.5,
+            "steps" to 42,
+            "isManual" to true,
+            "note" to "sample"
+        )
+        val record = ActivityRecord(
+            id = "typed-metadata",
+            patientId = "patient1",
+            timestamp = 1000L,
+            latitude = 1.0,
+            longitude = 2.0,
+            eventType = "location_update",
+            metadata = metadata
+        )
+
+        repository.insertRecord(record)
+
+        val captor = argumentCaptor<ActivityRecordEntity>()
+        verify(dao).insert(captor.capture())
+
+        val json = captor.firstValue.metadataJson.orEmpty()
+        assertEquals(true, json.contains("\"accuracy\":12.5"))
+        assertEquals(true, json.contains("\"steps\":42"))
+        assertEquals(true, json.contains("\"isManual\":true"))
+        assertEquals(true, json.contains("\"note\":\"sample\""))
     }
 }

@@ -3,7 +3,6 @@ package com.example.relapse_watch.presentation
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.lifecycleScope
@@ -12,6 +11,7 @@ import com.example.relapse_watch.presentation.theme.Relapse_WatchTheme
 import com.example.relapse_watch.services.NotificationService
 import com.example.relapse_watch.services.ReminderPlaybackQueueManager
 import com.example.relapse_watch.services.MediaCacheManager
+import com.example.relapse_watch.services.AppLogger
 import com.google.firebase.storage.FirebaseStorage
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.atomic.AtomicBoolean
@@ -56,7 +56,7 @@ class ReminderActivity : ComponentActivity() {
         val audioUriString = intent.getStringExtra("audioUri")?.takeIf { it.isNotBlank() }
         val videoUriString = intent.getStringExtra("videoUri")?.takeIf { it.isNotBlank() }
 
-        Log.d(
+        AppLogger.trace(
             TAG,
             "[R_TRACE][REMINDER_ACTIVITY] key=$correlationKey id=$reminderId triggeredAt=$triggeredAt " +
                 "imageUri=${imageUriString?.take(60)} " +
@@ -66,26 +66,26 @@ class ReminderActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             val imageUri = resolvePlayableUri(imageUriString, "${reminderId}_photo")
-            Log.d(TAG, "[R_TRACE][REMINDER_ACTIVITY] imageUri resolved=${imageUri != null}")
+            AppLogger.trace(TAG, "[R_TRACE][REMINDER_ACTIVITY] imageUri resolved=${imageUri != null}")
 
             val audioUri = resolvePlayableUri(
                 raw = audioUriString,
                 cacheFileName = "${reminderId}_audio",
                 requireCache = true
             )
-            Log.d(TAG, "[R_TRACE][REMINDER_ACTIVITY] audioUri resolved=${audioUri != null} (raw was ${if (audioUriString != null) "present" else "null"})")
+            AppLogger.trace(TAG, "[R_TRACE][REMINDER_ACTIVITY] audioUri resolved=${audioUri != null} (raw was ${if (audioUriString != null) "present" else "null"})")
 
             val videoUri = resolvePlayableUri(
                 raw = videoUriString,
                 cacheFileName = "${reminderId}_video",
                 requireCache = true
             )
-            Log.d(TAG, "[R_TRACE][REMINDER_ACTIVITY] videoUri resolved=${videoUri != null} (raw was ${if (videoUriString != null) "present" else "null"})")
+            AppLogger.trace(TAG, "[R_TRACE][REMINDER_ACTIVITY] videoUri resolved=${videoUri != null} (raw was ${if (videoUriString != null) "present" else "null"})")
 
             // Graceful degradation: if the reminder is video-only and
             // the video cache failed, skip — there's nothing to show.
             if (!videoUriString.isNullOrBlank() && videoUri == null && imageUri == null) {
-                Log.w(TAG, "[R_TRACE][REMINDER_ACTIVITY] Video-only reminder but video cache failed — skipping")
+                AppLogger.warn(TAG, "[R_TRACE][REMINDER_ACTIVITY] Video-only reminder but video cache failed — skipping")
                 finishReminderPlayback(reminderId)
                 return@launch
             }
@@ -93,13 +93,13 @@ class ReminderActivity : ComponentActivity() {
             // For photo+audio: if audio fails, still show the photo.
             // Only skip if audio is the ONLY media and it failed.
             if (!audioUriString.isNullOrBlank() && audioUri == null && imageUri == null && videoUri == null) {
-                Log.w(TAG, "[R_TRACE][REMINDER_ACTIVITY] Audio-only reminder but audio cache failed — skipping at activity level")
+                AppLogger.warn(TAG, "[R_TRACE][REMINDER_ACTIVITY] Audio-only reminder but audio cache failed — skipping at activity level")
                 finishReminderPlayback(reminderId)
                 return@launch
             }
 
             if (audioUri == null && audioUriString != null) {
-                Log.w(TAG, "[R_TRACE][REMINDER_ACTIVITY] Audio cache failed for id=$reminderId, degrading to photo-only")
+                AppLogger.warn(TAG, "[R_TRACE][REMINDER_ACTIVITY] Audio cache failed for id=$reminderId, degrading to photo-only")
             }
 
             setContent {
@@ -156,18 +156,18 @@ class ReminderActivity : ComponentActivity() {
 
         val cachedFile = mediaCacheManager.getCachedFile(cacheFileName)
         if (cachedFile != null && cachedFile.exists() && cachedFile.length() > 0) {
-            Log.d(TAG, "[R_TRACE][RESOLVE] Cache hit: $cacheFileName (${cachedFile.length()} bytes)")
+            AppLogger.trace(TAG, "[R_TRACE][RESOLVE] Cache hit: $cacheFileName (${cachedFile.length()} bytes)")
             return Uri.fromFile(cachedFile)
         }
 
         if (requireCache) {
-            Log.d(TAG, "[R_TRACE][RESOLVE] Cache miss for $cacheFileName, downloading...")
+            AppLogger.trace(TAG, "[R_TRACE][RESOLVE] Cache miss for $cacheFileName, downloading...")
             val result = mediaCacheManager.downloadMedia(raw, cacheFileName)
             if (result.isSuccess) {
-                Log.d(TAG, "[R_TRACE][RESOLVE] Download success: $cacheFileName")
+                AppLogger.trace(TAG, "[R_TRACE][RESOLVE] Download success: $cacheFileName")
                 return result.getOrNull()?.let { Uri.fromFile(it) }
             }
-            Log.w(TAG, "[R_TRACE][RESOLVE] Download failed for $cacheFileName: ${result.exceptionOrNull()?.message}")
+            AppLogger.warn(TAG, "[R_TRACE][RESOLVE] Download failed for $cacheFileName: ${result.exceptionOrNull()?.message}")
             return null
         }
 

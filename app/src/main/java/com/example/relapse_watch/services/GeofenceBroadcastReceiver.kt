@@ -5,8 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.example.relapse_watch.domain.model.LocationPoint
-import com.example.relapse_watch.domain.repository.GeoReminderRepository
-import com.example.relapse_watch.data.preferences.WatchPreferences
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.GeofencingEvent
@@ -14,21 +12,13 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import java.util.UUID
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
-    @Inject lateinit var geoReminderRepository: GeoReminderRepository
-    @Inject lateinit var watchPreferences: WatchPreferences
-    @Inject lateinit var activityTrackingService: ActivityTrackingService
-    @Inject lateinit var wearableCommunicationService: WearableCommunicationService
-    @Inject lateinit var reminderPlaybackQueueManager: ReminderPlaybackQueueManager
+    @Inject lateinit var reminderTriggerCoordinator: ReminderTriggerCoordinator
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -80,57 +70,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
     ) {
         if (transition != Geofence.GEOFENCE_TRANSITION_ENTER) return
 
-        reminderMutex.withLock {
-            val reminder = geoReminderRepository.getReminder(reminderId) ?: return@withLock
-            val timestamp = System.currentTimeMillis()
-            val correlation = "$reminderId:$timestamp"
-            val cooldownMinutes = watchPreferences.reminderCooldownMinutes.first()
-            val cooldownMs = cooldownMinutes.coerceAtLeast(0) * 60_000L
-
-            val lastTriggeredAt = reminder.lastTriggeredAt ?: 0L
-            if ((timestamp - lastTriggeredAt) < cooldownMs) {
-                Log.d(
-                    TAG,
-                    "[REMINDER_TRIGGER][SKIP_COOLDOWN] key=$correlation id=$reminderId now=$timestamp last=$lastTriggeredAt cooldownMs=$cooldownMs remainingMs=${cooldownMs - (timestamp - lastTriggeredAt)}"
-                )
-                return@withLock
-            }
-
-            geoReminderRepository.markAsTriggered(reminderId, timestamp)
-            Log.d(
-                TAG,
-                "[REMINDER_TRIGGER][MARKED] key=$correlation id=$reminderId triggeredAt=$timestamp prevLast=$lastTriggeredAt cooldownMs=$cooldownMs"
+        val point = location?.let {
+            LocationPoint(
+                latitude = it.latitude,
+                longitude = it.longitude,
+                timestamp = System.currentTimeMillis()
             )
-
-            val lat = location?.latitude ?: reminder.latitude
-            val lng = location?.longitude ?: reminder.longitude
-            val point = LocationPoint(lat, lng, timestamp)
-            activityTrackingService.recordReminderTriggered(reminderId, point)
-
-            reminderPlaybackQueueManager.enqueue(
-                ReminderPlaybackRequest(
-                    reminderId = reminder.id,
-                    triggeredAt = timestamp,
-                    title = reminder.title,
-                    body = reminder.body,
-                    imageUrl = reminder.imageUrl,
-                    audioUrl = reminder.audioUrl,
-                    videoUrl = reminder.videoUrl
-                )
-            )
-            Log.d(
-                TAG,
-                "[REMINDER_TRIGGER][ENQUEUED] key=$correlation id=${reminder.id} triggeredAt=$timestamp hasAudio=${!reminder.audioUrl.isNullOrBlank()}"
-            )
-
-            wearableCommunicationService.sendReminderTriggered(reminderId, reminder.title)
-
-            Log.d(TAG, "Reminder triggered: ${reminder.title} ($reminderId)")
         }
+        reminderTriggerCoordinator.triggerFromGeofence(reminderId, point)
     }
 
     companion object {
         private const val TAG = "GeofenceReceiver"
-        private val reminderMutex = Mutex()
     }
 }

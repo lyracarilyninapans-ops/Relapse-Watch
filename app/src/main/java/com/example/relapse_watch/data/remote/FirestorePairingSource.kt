@@ -2,6 +2,8 @@ package com.example.relapse_watch.data.remote
 
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -21,7 +23,8 @@ class FirestorePairingSource @Inject constructor(
                     "watchId" to watchId,
                     "status" to "pending",
                     "createdAt" to com.google.firebase.Timestamp.now()
-                )
+                ),
+                SetOptions.merge()
             ).await()
             Result.success(Unit)
         } catch (e: Exception) {
@@ -34,6 +37,11 @@ class FirestorePairingSource @Inject constructor(
         val listener: ListenerRegistration = docRef.addSnapshotListener { snapshot, error ->
             if (error != null) {
                 close(error)
+                return@addSnapshotListener
+            }
+            // Ignore cache-only snapshots to avoid replaying stale pairing
+            // states (especially old "unpaired") after a fresh re-pair.
+            if (snapshot != null && snapshot.metadata.isFromCache) {
                 return@addSnapshotListener
             }
             trySend(snapshot?.data)
@@ -63,10 +71,17 @@ class FirestorePairingSource @Inject constructor(
             .document("current")
         val listener: ListenerRegistration = docRef.addSnapshotListener { snapshot, error ->
             if (error != null) {
-                close(error)
+                // Keep stream alive on transient listener failures.
+                trySend(null)
                 return@addSnapshotListener
             }
-            trySend(snapshot?.data?.get("status") as? String)
+            val status = snapshot?.data?.get("status") as? String
+            // Allow cache-origin "unpaired" so phone-initiated unpair can be
+            // observed promptly during reconnect/offline-first conditions.
+            if (snapshot != null && snapshot.metadata.isFromCache && status != "unpaired") {
+                return@addSnapshotListener
+            }
+            trySend(status)
         }
         awaitClose { listener.remove() }
     }
@@ -87,12 +102,33 @@ class FirestorePairingSource @Inject constructor(
                         "watchId" to null,
                         "pairedAt" to null,
                         "status" to "unpaired"
-                    )
+                    ),
+                    SetOptions.merge()
                 ).await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun fetchPairingCodeStatusFromServer(code: String): String? {
+        if (code.isBlank()) return null
+        val doc = firestore.collection("watchPairingCodes")
+            .document(code)
+            .get(Source.SERVER)
+            .await()
+        return doc.data?.get("status") as? String
+    }
+
+    suspend fun fetchCaregiverPairingStatusFromServer(caregiverUid: String): String? {
+        if (caregiverUid.isBlank()) return null
+        val doc = firestore.collection("users")
+            .document(caregiverUid)
+            .collection("watchPairing")
+            .document("current")
+            .get(Source.SERVER)
+            .await()
+        return doc.data?.get("status") as? String
     }
 
     /**

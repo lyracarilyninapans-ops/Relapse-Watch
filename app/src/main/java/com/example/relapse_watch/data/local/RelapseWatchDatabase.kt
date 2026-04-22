@@ -24,7 +24,7 @@ import com.example.relapse_watch.data.local.entity.SafeZoneEventEntity
         GeoReminderEntity::class,
     ],
     version = 3,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class RelapseWatchDatabase : RoomDatabase() {
     abstract fun activityRecordDao(): ActivityRecordDao

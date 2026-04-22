@@ -1,10 +1,12 @@
 package com.example.relapse_watch.services
 
+import android.app.ActivityOptions
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.relapse_watch.R
@@ -58,11 +60,28 @@ class NotificationService @Inject constructor(
         )
     }
 
+    private fun getActivityPendingIntent(
+        requestCode: Int,
+        intent: Intent,
+        flags: Int = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    ): PendingIntent {
+        if (Build.VERSION.SDK_INT >= 35) {
+            val options = ActivityOptions.makeBasic().apply {
+                setPendingIntentCreatorBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                )
+            }
+            return PendingIntent.getActivity(context, requestCode, intent, flags, options.toBundle())
+        }
+
+        return PendingIntent.getActivity(context, requestCode, intent, flags)
+    }
+
     fun showSafeZoneExitAlert() {
         val intent = Intent(context, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pendingIntent = getActivityPendingIntent(
+            requestCode = 0,
+            intent = intent
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ALERT)
@@ -80,24 +99,16 @@ class NotificationService @Inject constructor(
     }
 
     fun showSafeZoneEnterNotification() {
-        val notification = NotificationCompat.Builder(context, CHANNEL_ALERT)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Safe Zone")
-            .setContentText("You are back in the safe zone")
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setAutoCancel(true)
-            .build()
-
-        notificationManager.notify(NOTIFICATION_SAFE_ZONE, notification)
+        showSafeZoneReturnNotification()
     }
 
     fun showReminderNotification(reminderId: String, title: String, body: String) {
         val intent = Intent(context, ReminderActivity::class.java).apply {
             putExtra("reminderId", reminderId)
         }
-        val pendingIntent = PendingIntent.getActivity(
-            context, reminderId.hashCode(), intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pendingIntent = getActivityPendingIntent(
+            requestCode = reminderId.hashCode(),
+            intent = intent
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_REMINDER)
@@ -133,20 +144,20 @@ class NotificationService @Inject constructor(
      * Activity, bypassing background activity-start restrictions (Android 12+).
      */
     fun showSafeZoneNavigationNotification(safeZoneLat: Double, safeZoneLng: Double) {
+        val requestCode = (System.currentTimeMillis() and 0x7FFFFFFF).toInt()
         val navIntent = Intent(
             context,
             com.example.relapse_watch.presentation.PreNavigationActivity::class.java
         ).apply {
             putExtra("safe_zone_lat", safeZoneLat)
             putExtra("safe_zone_lng", safeZoneLng)
+            putExtra("navigation_notification_ts", System.currentTimeMillis())
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
 
-        val fullScreenPendingIntent = PendingIntent.getActivity(
-            context,
-            NOTIFICATION_NAVIGATION_REQUEST,
-            navIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val fullScreenPendingIntent = getActivityPendingIntent(
+            requestCode = requestCode,
+            intent = navIntent
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ALERT)
@@ -154,14 +165,18 @@ class NotificationService @Inject constructor(
             .setContentTitle("Outside Safe Zone")
             .setContentText("Navigating you back to the safe zone")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setContentIntent(fullScreenPendingIntent)
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setAutoCancel(true)
             .setOngoing(false)
+            .setVibrate(longArrayOf(0, 700, 200, 700))
             .build()
 
+        // Dismiss existing exit notification so this posts as a fresh alert
+        notificationManager.cancel(NOTIFICATION_NAVIGATION)
         notificationManager.notify(NOTIFICATION_NAVIGATION, notification)
+        Log.d(TAG, "Safe-zone exit notification posted requestCode=$requestCode")
     }
 
     fun dismissNavigationNotification() {
@@ -178,18 +193,18 @@ class NotificationService @Inject constructor(
      * inside the safe zone and can stop Google Maps navigation.
      */
     fun showSafeZoneReturnNotification() {
+        val requestCode = (System.currentTimeMillis() and 0x7FFFFFFF).toInt()
         val returnIntent = Intent(
             context,
             com.example.relapse_watch.presentation.SafeZoneReturnActivity::class.java
         ).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra("return_notification_ts", System.currentTimeMillis())
         }
 
-        val fullScreenPendingIntent = PendingIntent.getActivity(
-            context,
-            NOTIFICATION_RETURN_REQUEST,
-            returnIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val fullScreenPendingIntent = getActivityPendingIntent(
+            requestCode = requestCode,
+            intent = returnIntent
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ALERT)
@@ -202,12 +217,15 @@ class NotificationService @Inject constructor(
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setAutoCancel(true)
             .setOngoing(false)
+            .setTimeoutAfter(SAFE_ZONE_RETURN_AUTO_DISMISS_MS)
             .setVibrate(longArrayOf(0, 800, 200, 800, 200, 800))
             .build()
 
-        // Dismiss any lingering navigation notification first
+        // Dismiss lingering notifications first so this posts as a fresh alert
         notificationManager.cancel(NOTIFICATION_NAVIGATION)
+        notificationManager.cancel(NOTIFICATION_RETURN)
         notificationManager.notify(NOTIFICATION_RETURN, notification)
+        Log.d(TAG, "Safe-zone return notification posted requestCode=$requestCode")
     }
 
     fun dismissReturnNotification() {
@@ -216,7 +234,8 @@ class NotificationService @Inject constructor(
 
     /**
      * Shows a high-priority full-screen notification that launches
-     * ReminderActivity with media playback extras.
+     * PreReminderActivity first. That screen gives a short haptic alert,
+     * then transitions to ReminderActivity after 2 seconds.
      *
      * On Wear OS (Android 12+) calling startActivity() from a background
      * BroadcastReceiver coroutine is silently blocked. Using fullScreenIntent
@@ -237,7 +256,7 @@ class NotificationService @Inject constructor(
             "[R_TRACE][REMINDER_NOTIFICATION][SHOW] key=$correlationKey id=$reminderId hasImage=${!imageUrl.isNullOrBlank()} hasAudio=${!audioUrl.isNullOrBlank()} hasVideo=${!videoUrl.isNullOrBlank()}"
         )
 
-        val intent = Intent(context, ReminderActivity::class.java).apply {
+        val intent = Intent(context, com.example.relapse_watch.presentation.PreReminderActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_SINGLE_TOP or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -251,11 +270,9 @@ class NotificationService @Inject constructor(
             putExtra("videoUri", videoUrl ?: "")
         }
 
-        val fullScreenPendingIntent = PendingIntent.getActivity(
-            context,
-            NOTIFICATION_REMINDER_PLAYBACK_REQUEST,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val fullScreenPendingIntent = getActivityPendingIntent(
+            requestCode = NOTIFICATION_REMINDER_PLAYBACK_REQUEST,
+            intent = intent
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_REMINDER)
@@ -280,6 +297,7 @@ class NotificationService @Inject constructor(
 
     companion object {
         private const val TAG = "NotificationService"
+        private const val SAFE_ZONE_RETURN_AUTO_DISMISS_MS = 10_000L
         const val CHANNEL_ALERT = "alert_channel"
         const val CHANNEL_REMINDER = "reminder_channel"
         const val CHANNEL_SYNC = "sync_channel"

@@ -44,7 +44,9 @@ class FirestoreActivitySourceTest {
             metadataJson = """{"accuracy":"5.0"}"""
         )
 
-        assertEquals("""{"accuracy":"5.0"}""", map["metadata"])
+        @Suppress("UNCHECKED_CAST")
+        val metadata = map["metadata"] as Map<String, Any>
+        assertEquals("5.0", metadata["accuracy"])
     }
 
     @Test

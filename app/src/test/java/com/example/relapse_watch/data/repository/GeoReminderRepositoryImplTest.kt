@@ -7,6 +7,43 @@ import org.junit.Test
 class GeoReminderRepositoryImplTest {
 
     @Test
+    fun `extractCoordinates reads direct latitude longitude numbers`() {
+        val data = mapOf<String, Any>(
+            "latitude" to 12.34,
+            "longitude" to 56.78
+        )
+
+        val result = GeoReminderRepositoryImpl.extractCoordinatesForTest(data)
+
+        assertEquals(12.34, result?.first)
+        assertEquals(56.78, result?.second)
+    }
+
+    @Test
+    fun `extractCoordinates reads lat lng string values`() {
+        val data = mapOf<String, Any>(
+            "lat" to "12.34",
+            "lng" to "56.78"
+        )
+
+        val result = GeoReminderRepositoryImpl.extractCoordinatesForTest(data)
+
+        assertEquals(12.34, result?.first)
+        assertEquals(56.78, result?.second)
+    }
+
+    @Test
+    fun `extractRadiusMeters falls back and clamps minimum`() {
+        val fallback = GeoReminderRepositoryImpl.extractRadiusMetersForTest(emptyMap())
+        val clamped = GeoReminderRepositoryImpl.extractRadiusMetersForTest(mapOf("radiusMeters" to 0))
+        val parsed = GeoReminderRepositoryImpl.extractRadiusMetersForTest(mapOf("radius" to "85"))
+
+        assertEquals(100, fallback)
+        assertEquals(1, clamped)
+        assertEquals(85, parsed)
+    }
+
+    @Test
     fun `extractMediaUrls prefers mediaItems values`() {
         val data = mapOf<String, Any>(
             "mediaItems" to listOf(

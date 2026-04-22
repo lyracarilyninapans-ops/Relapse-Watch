@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -22,6 +25,7 @@ class SyncService @Inject constructor(
     private val activityRecordDao: ActivityRecordDao,
     private val firestoreActivitySource: FirestoreActivitySource,
     private val preferences: WatchPreferences,
+    private val batteryStatusProvider: BatteryStatusProvider,
     private val dailySummaryRepository: DailySummaryRepository,
     private val geoReminderRepository: GeoReminderRepository,
     private val safeZoneRepository: SafeZoneRepository,
@@ -30,9 +34,18 @@ class SyncService @Inject constructor(
 ) {
 
     private val syncScope = CoroutineScope(Dispatchers.IO)
+    private val syncMutex = Mutex()
+    private val reminderSyncMutex = Mutex()
 
     suspend fun syncActivityData(): Result<Int> {
+        if (!syncMutex.tryLock()) {
+            Log.d(TAG, "Sync already in progress, skipping overlapping invocation")
+            return Result.success(0)
+        }
+
         return try {
+            preferences.migrateSensitiveValuesIfNeeded()
+
             val caregiverUid = preferences.caregiverUid.first()
             val patientId = preferences.patientId.first()
             val watchId = preferences.watchId.first()
@@ -43,12 +56,14 @@ class SyncService @Inject constructor(
                 return Result.success(0)
             }
 
-            // Always send a heartbeat so the phone knows we're alive
+            // Always send a heartbeat so the phone knows we're alive.
+            // Include current battery level when available.
+            val batteryLevel = batteryStatusProvider.getBatteryLevelPercent()
             val heartbeatResult = firestoreActivitySource.updateWatchStatus(
                 caregiverUid = caregiverUid,
                 patientId = patientId,
                 watchId = watchId,
-                batteryLevel = null
+                batteryLevel = batteryLevel
             )
             if (heartbeatResult.isSuccess) {
                 preferences.updateLastSync(System.currentTimeMillis())
@@ -68,7 +83,8 @@ class SyncService @Inject constructor(
             syncSafeZoneEventsToFirestore(caregiverUid, patientId)
 
             // Sync geo-reminders from Firestore into local Room DB
-            val remindersSynced = syncGeoRemindersFromFirestore(caregiverUid, patientId)
+            val remindersSyncResult = syncGeoRemindersFromFirestore(caregiverUid, patientId)
+            val remindersSynced = remindersSyncResult.isSuccess
 
             if (!reminderCooldownSynced || !safeZoneSynced || !remindersSynced) {
                 Log.w(TAG, "Cloud config sync incomplete")
@@ -77,6 +93,9 @@ class SyncService @Inject constructor(
             val pendingRecords = activityRecordDao.getPendingUpload()
             if (pendingRecords.isEmpty()) {
                 Log.d(TAG, "No pending records to sync (heartbeat sent)")
+                if (remindersSyncResult.isFailure) {
+                    return Result.failure(remindersSyncResult.exceptionOrNull() ?: Exception("Reminder sync failed"))
+                }
                 return Result.success(0)
             }
 
@@ -106,6 +125,9 @@ class SyncService @Inject constructor(
                 preferences.updateLastSync(System.currentTimeMillis())
 
                 Log.d(TAG, "Successfully synced ${pendingRecords.size} records")
+                if (remindersSyncResult.isFailure) {
+                    return Result.failure(remindersSyncResult.exceptionOrNull() ?: Exception("Reminder sync failed"))
+                }
                 Result.success(pendingRecords.size)
             } else {
                 Log.e(TAG, "Upload failed", uploadResult.exceptionOrNull())
@@ -114,6 +136,8 @@ class SyncService @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Sync failed", e)
             Result.failure(e)
+        } finally {
+            syncMutex.unlock()
         }
     }
 
@@ -169,6 +193,7 @@ class SyncService @Inject constructor(
                 }
                 safeZoneRepository.clearActiveSafeZone()
                 preferences.setSafeZoneRadius(0)
+                preferences.clearInsideSafeZone()
                 return true
             }
 
@@ -195,23 +220,44 @@ class SyncService @Inject constructor(
                 geofenceService.removeGeofence(currentActiveZone.id)
             }
 
+            val hasChanged = currentActiveZone?.let {
+                it.id != config.id ||
+                    it.centerLat != config.centerLat ||
+                    it.centerLng != config.centerLng ||
+                    it.radiusMeters != config.radiusMeters ||
+                    it.isActive != config.isActive
+            } ?: true
+
+            // Enforce single-active-zone semantics in local DB. Without this,
+            // old-account zones can remain active and be returned by LIMIT 1.
+            safeZoneRepository.clearActiveSafeZone()
             safeZoneRepository.updateFromFirestore(config)
 
-            geofenceService.removeGeofence(config.id)
             if (config.isActive) {
                 preferences.setSafeZoneRadius(radiusMeters)
-                val registerResult = geofenceService.registerSafeZone(config)
-                if (registerResult.isFailure) {
-                    Log.e(
-                        TAG,
-                        "Failed to register safe-zone geofence from Firestore sync: ${config.id}",
-                        registerResult.exceptionOrNull()
-                    )
+                if (hasChanged) {
+                    if (currentActiveZone?.id == config.id) {
+                        geofenceService.removeGeofence(config.id)
+                    }
+                    val registerResult = geofenceService.registerSafeZone(config)
+                    if (registerResult.isFailure) {
+                        Log.e(
+                            TAG,
+                            "Failed to register safe-zone geofence from Firestore sync: ${config.id}",
+                            registerResult.exceptionOrNull()
+                        )
+                    }
+                } else {
+                    Log.d(TAG, "Safe-zone geofence unchanged, skipping re-registration: ${config.id}")
                 }
             } else {
+                geofenceService.removeGeofence(config.id)
                 preferences.setSafeZoneRadius(0)
+                preferences.clearInsideSafeZone()
             }
             return true
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to sync safe zone from Firestore", e)
             return false
@@ -247,70 +293,76 @@ class SyncService @Inject constructor(
         }
     }
 
-    suspend fun syncGeoRemindersFromFirestore(caregiverUid: String, patientId: String): Boolean {
-        try {
-            val existingReminders = geoReminderRepository.getActiveReminders().first()
-            geoReminderRepository.syncFromFirestore(caregiverUid, patientId)
-            val syncedReminders = geoReminderRepository.getActiveReminders().first()
+    suspend fun syncGeoRemindersFromFirestore(caregiverUid: String, patientId: String): Result<Unit> {
+        return reminderSyncMutex.withLock {
+            try {
+                val existingReminders = geoReminderRepository.getActiveReminders().first()
+                val syncResult = geoReminderRepository.syncFromFirestore(caregiverUid, patientId)
+                if (syncResult.isFailure) {
+                    return@withLock Result.failure(syncResult.exceptionOrNull() ?: Exception("Reminder sync failed"))
+                }
+                val syncedReminders = geoReminderRepository.getActiveReminders().first()
 
-            // Remove OS geofences for reminders that were deleted on the phone
-            val syncedReminderIds = syncedReminders.map { it.id }.toSet()
-            existingReminders
-                .filter { it.id !in syncedReminderIds }
-                .forEach { reminder ->
-                    geofenceService.removeGeofence("reminder_${reminder.id}")
+                // Remove OS geofences for reminders that were deleted on the phone
+                val syncedReminderIds = syncedReminders.map { it.id }.toSet()
+                existingReminders
+                    .filter { it.id !in syncedReminderIds }
+                    .forEach { reminder ->
+                        geofenceService.removeGeofence("reminder_${reminder.id}")
+                    }
+
+                // For reminders whose location/radius changed, remove the stale
+                // DataStore key so registerReminder() will re-register them.
+                val existingById = existingReminders.associateBy { it.id }
+                syncedReminders.forEach { reminder ->
+                    val old = existingById[reminder.id]
+                    if (old != null && (
+                        old.latitude != reminder.latitude ||
+                        old.longitude != reminder.longitude ||
+                        old.radiusMeters != reminder.radiusMeters)) {
+                        // Parameters changed — clear the old persisted key
+                        geofenceService.removeGeofence("reminder_${reminder.id}")
+                    }
                 }
 
-            // For reminders whose location/radius changed, remove the stale
-            // DataStore key so registerReminder() will re-register them.
-            val existingById = existingReminders.associateBy { it.id }
-            syncedReminders.forEach { reminder ->
-                val old = existingById[reminder.id]
-                if (old != null && (
-                    old.latitude != reminder.latitude ||
-                    old.longitude != reminder.longitude ||
-                    old.radiusMeters != reminder.radiusMeters)) {
-                    // Parameters changed — clear the old persisted key
-                    geofenceService.removeGeofence("reminder_${reminder.id}")
-                }
-            }
-
-            // Register geofences for all synced reminders.
-            // registerReminder() internally skips if the key already
-            // exists in DataStore (unchanged reminders).
-            syncedReminders.forEach { reminder ->
-                val registerResult = geofenceService.registerReminder(
-                    id = reminder.id,
-                    latitude = reminder.latitude,
-                    longitude = reminder.longitude,
-                    radiusMeters = reminder.radiusMeters
-                )
-                if (registerResult.isFailure) {
-                    Log.e(
-                        TAG,
-                        "Failed to register reminder geofence: ${reminder.id}",
-                        registerResult.exceptionOrNull()
+                // Register geofences for all synced reminders.
+                // registerReminder() internally skips if the key already
+                // exists in DataStore (unchanged reminders).
+                syncedReminders.forEach { reminder ->
+                    val registerResult = geofenceService.registerReminder(
+                        id = reminder.id,
+                        latitude = reminder.latitude,
+                        longitude = reminder.longitude,
+                        radiusMeters = reminder.radiusMeters
                     )
-                }
+                    if (registerResult.isFailure) {
+                        Log.e(
+                            TAG,
+                            "Failed to register reminder geofence: ${reminder.id}",
+                            registerResult.exceptionOrNull()
+                        )
+                    }
 
-                // Background download of media
-                syncScope.launch {
-                    val id = reminder.id
-                    reminder.imageUrl?.let { url ->
-                        mediaCacheManager.downloadMedia(url, "${id}_photo")
-                    }
-                    reminder.audioUrl?.let { url ->
-                        mediaCacheManager.downloadMedia(url, "${id}_audio")
-                    }
-                    reminder.videoUrl?.let { url ->
-                        mediaCacheManager.downloadMedia(url, "${id}_video")
+                    // Background download of media
+                    syncScope.launch {
+                        val id = reminder.id
+                        reminder.imageUrl?.let { url ->
+                            prefetchMediaIfMissing(url, "${id}_photo")
+                        }
+                        reminder.audioUrl?.let { url ->
+                            prefetchMediaIfMissing(url, "${id}_audio")
+                        }
+                        reminder.videoUrl?.let { url ->
+                            prefetchMediaIfMissing(url, "${id}_video")
+                        }
                     }
                 }
+                Result.success(Unit)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Log.e(TAG, "Failed to sync geo-reminders from Firestore", e)
+                Result.failure(e)
             }
-            return true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to sync geo-reminders from Firestore", e)
-            return false
         }
 
     }
@@ -326,6 +378,14 @@ class SyncService @Inject constructor(
             Log.e(TAG, "Failed to sync reminder cooldown setting", e)
             return false
         }
+    }
+
+    private suspend fun prefetchMediaIfMissing(url: String, cacheFileName: String) {
+        val cached = mediaCacheManager.getCachedFile(cacheFileName)
+        if (cached != null && cached.exists() && cached.length() > 0) {
+            return
+        }
+        mediaCacheManager.downloadMedia(url, cacheFileName)
     }
 
     companion object {

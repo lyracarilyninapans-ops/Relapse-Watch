@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
@@ -51,6 +52,8 @@ fun ReminderScreen(
     onPlaybackFinished: () -> Unit
 ) {
     val context = LocalContext.current
+    val isRoundScreen = LocalConfiguration.current.isScreenRound
+    val safeTextWidthFraction = if (isRoundScreen) 0.78f else 0.92f
 
     val mode = remember(imageUri, audioUri, videoUri) {
         when {
@@ -162,7 +165,9 @@ fun ReminderScreen(
     ) {
         if (mediaLoadError) {
             androidx.compose.foundation.layout.Column(
-                modifier = Modifier.align(Alignment.Center),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth(safeTextWidthFraction),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
@@ -178,7 +183,9 @@ fun ReminderScreen(
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 4.dp, start = 12.dp, end = 12.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp, start = 12.dp, end = 12.dp)
                 )
                 if (body.isNotBlank()) {
                     Text(
@@ -186,13 +193,19 @@ fun ReminderScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color.White,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(top = 8.dp, start = 12.dp, end = 12.dp)
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp, start = 12.dp, end = 12.dp)
                     )
                 }
             }
         } else if (!playbackReady && (mode == PlaybackMode.AudioOnly || mode == PlaybackMode.PhotoWithAudio || mode == PlaybackMode.VideoOnly)) {
             androidx.compose.foundation.layout.Column(
-                modifier = Modifier.align(Alignment.Center),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth(safeTextWidthFraction),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 CircularProgressIndicator()
@@ -236,7 +249,9 @@ fun ReminderScreen(
                                 textAlign = TextAlign.Center,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 12.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth(safeTextWidthFraction)
+                                    .padding(horizontal = 12.dp)
                             )
                         }
                     }
@@ -274,7 +289,9 @@ fun ReminderScreen(
                                 textAlign = TextAlign.Center,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 12.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth(safeTextWidthFraction)
+                                    .padding(horizontal = 12.dp)
                             )
                         }
                     }
@@ -295,7 +312,9 @@ fun ReminderScreen(
                             textAlign = TextAlign.Center,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 12.dp)
+                            modifier = Modifier
+                                .fillMaxWidth(safeTextWidthFraction)
+                                .padding(horizontal = 12.dp)
                         )
 
                         if (body.isNotBlank()) {
@@ -304,8 +323,11 @@ fun ReminderScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color.White,
                                 textAlign = TextAlign.Center,
+                                maxLines = 5,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
+                                    .fillMaxWidth(safeTextWidthFraction)
                                     .padding(horizontal = 12.dp, vertical = 16.dp)
                             )
                         }
@@ -326,11 +348,12 @@ fun ReminderScreen(
                     style = MaterialTheme.typography.titleMedium,
                     color = Color.White,
                     textAlign = TextAlign.Center,
-                    maxLines = 1,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(10.dp)
+                        .fillMaxWidth(safeTextWidthFraction)
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
                 )
             }
         }

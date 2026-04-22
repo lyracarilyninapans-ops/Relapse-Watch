@@ -62,7 +62,8 @@ fun MonitoringScreen(
         item {
             SafeZoneCard(
                 safeZoneStatus = monitoringState.safeZoneStatus,
-                safeZoneRadiusMeters = monitoringState.safeZoneRadiusMeters
+                safeZoneRadiusMeters = monitoringState.safeZoneRadiusMeters,
+                lastEvaluatedTimestamp = monitoringState.lastLocationTimestamp
             )
         }
 
@@ -163,7 +164,8 @@ private fun MonitoringCard(
 @Composable
 private fun SafeZoneCard(
     safeZoneStatus: SafeZoneStatus,
-    safeZoneRadiusMeters: Int?
+    safeZoneRadiusMeters: Int?,
+    lastEvaluatedTimestamp: Long?
 ) {
     Card(
         onClick = {},
@@ -214,6 +216,12 @@ private fun SafeZoneCard(
                         "Not set"
                     },
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text(
+                    text = "Last evaluated: ${formatLastSync(lastEvaluatedTimestamp)}",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

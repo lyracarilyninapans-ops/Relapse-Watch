@@ -20,6 +20,11 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
+enum class TrackingProfile {
+    BALANCED,
+    HIGH_ACCURACY
+}
+
 @Singleton
 class LocationService @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -27,9 +32,25 @@ class LocationService @Inject constructor(
 ) {
 
     @SuppressLint("MissingPermission")
-    fun getLocationUpdates(intervalMs: Long = 300_000L): Flow<LocationPoint> = callbackFlow {
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
+    fun getLocationUpdates(
+        intervalMs: Long = 300_000L,
+        profile: TrackingProfile = TrackingProfile.BALANCED
+    ): Flow<LocationPoint> = callbackFlow {
+        val request = LocationRequest.Builder(
+            if (profile == TrackingProfile.HIGH_ACCURACY) {
+                Priority.PRIORITY_HIGH_ACCURACY
+            } else {
+                Priority.PRIORITY_BALANCED_POWER_ACCURACY
+            },
+            intervalMs
+        )
             .setMinUpdateIntervalMillis(intervalMs / 2)
+            .setMinUpdateDistanceMeters(
+                if (profile == TrackingProfile.HIGH_ACCURACY) 10f else 35f
+            )
+            .setMaxUpdateDelayMillis(
+                if (profile == TrackingProfile.HIGH_ACCURACY) intervalMs else intervalMs * 2
+            )
             .build()
 
         val callback = object : LocationCallback() {

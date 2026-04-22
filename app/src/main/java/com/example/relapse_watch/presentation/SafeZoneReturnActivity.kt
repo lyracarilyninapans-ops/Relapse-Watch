@@ -9,8 +9,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.core.content.getSystemService
 import com.example.relapse_watch.presentation.screens.SafeZoneReturnScreen
 import com.example.relapse_watch.presentation.theme.Relapse_WatchTheme
+import com.example.relapse_watch.services.NotificationService
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
+import javax.inject.Inject
 
 /**
  * Full-screen alert shown when the patient re-enters the safe zone while
@@ -19,6 +21,8 @@ import kotlinx.coroutines.delay
  */
 @AndroidEntryPoint
 class SafeZoneReturnActivity : ComponentActivity() {
+
+    @Inject lateinit var notificationService: NotificationService
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,6 +46,7 @@ class SafeZoneReturnActivity : ComponentActivity() {
                 SafeZoneReturnScreen(
                     onDismiss = {
                         vibrator?.cancel()
+                        notificationService.dismissReturnNotification()
                         finish()
                     }
                 )
@@ -50,6 +55,7 @@ class SafeZoneReturnActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        notificationService.dismissReturnNotification()
         getSystemService<Vibrator>()?.cancel()
         super.onDestroy()
     }

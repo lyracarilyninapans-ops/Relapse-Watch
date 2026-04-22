@@ -16,11 +16,15 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.getSystemService
 import com.example.relapse_watch.presentation.screens.PreNavigationScreen
 import com.example.relapse_watch.presentation.theme.Relapse_WatchTheme
+import com.example.relapse_watch.services.NotificationService
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class PreNavigationActivity : ComponentActivity() {
+
+    @Inject lateinit var notificationService: NotificationService
 
     private var countdown by mutableIntStateOf(10)
 
@@ -52,6 +56,7 @@ class PreNavigationActivity : ComponentActivity() {
                         countdown--
                     }
                     vibrator?.cancel()
+                    notificationService.dismissNavigationNotification()
                     launchGoogleMapsNavigation(safeZoneLat, safeZoneLng)
                     finish()
                 }
@@ -60,6 +65,7 @@ class PreNavigationActivity : ComponentActivity() {
                     countdown = countdown,
                     onCancel = {
                         vibrator?.cancel()
+                        notificationService.dismissNavigationNotification()
                         finish()
                     }
                 )
@@ -111,6 +117,7 @@ class PreNavigationActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        notificationService.dismissNavigationNotification()
         super.onDestroy()
         getSystemService<Vibrator>()?.cancel()
     }

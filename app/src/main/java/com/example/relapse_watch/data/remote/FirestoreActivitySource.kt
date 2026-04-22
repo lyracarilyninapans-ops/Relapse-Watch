@@ -3,6 +3,13 @@ package com.example.relapse_watch.data.remote
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.SetOptions
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -28,7 +35,7 @@ class FirestoreActivitySource @Inject constructor(
                 chunk.forEach { record ->
                     val docId = record["id"] as String
                     val docRef = firestore.collection(basePath).document(docId)
-                    batch.set(docRef, record)
+                    batch.set(docRef, record, SetOptions.merge())
                 }
                 batch.commit().await()
             }
@@ -97,7 +104,7 @@ class FirestoreActivitySource @Inject constructor(
             firestore.collection("users").document(caregiverUid)
                 .collection("patients").document(patientId)
                 .collection("dailySummaries").document(dateKey)
-                .set(summary)
+                .set(summary, SetOptions.merge())
                 .await()
             Result.success(Unit)
         } catch (e: Exception) {
@@ -150,7 +157,7 @@ class FirestoreActivitySource @Inject constructor(
             .limit(1)
         val listener: ListenerRegistration = query.addSnapshotListener { snapshot, error ->
             if (error != null) {
-                trySend(null)
+                close(error)
                 return@addSnapshotListener
             }
             val doc = snapshot?.documents?.firstOrNull()
@@ -173,7 +180,7 @@ class FirestoreActivitySource @Inject constructor(
             .whereEqualTo("isActive", true)
         val listener: ListenerRegistration = query.addSnapshotListener { snapshot, error ->
             if (error != null) {
-                trySend(emptyList())
+                close(error)
                 return@addSnapshotListener
             }
             val results = snapshot?.documents?.mapNotNull { doc ->
@@ -185,6 +192,8 @@ class FirestoreActivitySource @Inject constructor(
     }
 
     companion object {
+        private val json = Json
+
         fun activityRecordToFirestoreMap(
             id: String,
             patientId: String,
@@ -203,9 +212,38 @@ class FirestoreActivitySource @Inject constructor(
                 "eventType" to eventType
             )
             if (metadataJson != null) {
-                map["metadata"] = metadataJson
+                map["metadata"] = parseMetadataJson(metadataJson) ?: metadataJson
             }
             return map
+        }
+
+        private fun parseMetadataJson(raw: String): Map<String, Any>? {
+            return try {
+                val decoded = json.decodeFromString(
+                    MapSerializer(String.serializer(), JsonElement.serializer()),
+                    raw
+                )
+                decoded.mapValues { (_, value) -> value.toNativeValue() }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun JsonElement.toNativeValue(): Any {
+            return when (this) {
+                is JsonObject -> this.mapValues { (_, value) -> value.toNativeValue() }
+                is kotlinx.serialization.json.JsonArray -> this.map { it.toNativeValue() }
+                is JsonPrimitive -> {
+                    when {
+                        isString -> content
+                        content.equals("true", ignoreCase = true) -> true
+                        content.equals("false", ignoreCase = true) -> false
+                        content.toLongOrNull() != null -> content.toLong()
+                        content.toDoubleOrNull() != null -> content.toDouble()
+                        else -> content
+                    }
+                }
+            }
         }
 
         private const val BATCH_SIZE = 500

@@ -1,6 +1,7 @@
 package com.example.relapse_watch.services
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -25,6 +26,7 @@ import javax.inject.Singleton
 class SyncScheduler @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
+    private var lastImmediateSyncRequestElapsedMs: Long = 0L
 
     fun schedulePeriodicSync() {
         try {
@@ -51,6 +53,13 @@ class SyncScheduler @Inject constructor(
     }
 
     fun requestImmediateSync() {
+        val now = SystemClock.elapsedRealtime()
+        if ((now - lastImmediateSyncRequestElapsedMs) < MIN_IMMEDIATE_SYNC_SPACING_MS) {
+            Log.d(TAG, "Immediate sync request debounced")
+            return
+        }
+        lastImmediateSyncRequestElapsedMs = now
+
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
@@ -78,6 +87,7 @@ class SyncScheduler @Inject constructor(
         private const val WORK_NAME = "periodic_activity_sync"
         private const val IMMEDIATE_WORK_NAME = "immediate_activity_sync"
         private const val SYNC_INTERVAL_MINUTES = 15L
+        private const val MIN_IMMEDIATE_SYNC_SPACING_MS = 2 * 60_000L
     }
 }
 

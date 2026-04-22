@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
     ) { grants ->
         val fineGranted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true
         val coarseGranted = grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        val locationGranted = fineGranted || coarseGranted
+        val locationGranted = fineGranted
 
         val notificationGranted = grants[Manifest.permission.POST_NOTIFICATIONS] == true
         if (!notificationGranted) {
@@ -66,13 +66,20 @@ class MainActivity : ComponentActivity() {
             startMonitoringServices()
             requestBackgroundLocationIfNeeded()
         } else {
-            Log.w(TAG, "Location permission denied — monitoring/geofencing may not start")
+            if (coarseGranted) {
+                Log.w(TAG, "Only coarse location granted — fine location is required for geofencing")
+            } else {
+                Log.w(TAG, "Location permission denied — monitoring/geofencing may not start")
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        
+        // Prevent WindowManager from destroying surfaces when screen times out
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Check if permissions are already granted (e.g. after a restart)
         _locationGranted.value = hasLocationPermission()
@@ -150,14 +157,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasLocationPermission(): Boolean {
-        val locationGranted = ContextCompat.checkSelfPermission(
+        val fineGranted = ContextCompat.checkSelfPermission(
             this, Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED ||
-        ContextCompat.checkSelfPermission(
-            this, Manifest.permission.ACCESS_COARSE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
 
-        return locationGranted
+        return fineGranted
     }
 
     private fun requestLocationPermissions() {

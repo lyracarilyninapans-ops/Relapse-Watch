@@ -16,11 +16,17 @@ interface GeoReminderDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(reminder: GeoReminderEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(reminders: List<GeoReminderEntity>)
+
     @Query("SELECT * FROM geo_reminders WHERE isActive = 1")
     fun getActiveReminders(): Flow<List<GeoReminderEntity>>
 
     @Query("SELECT * FROM geo_reminders WHERE id = :id")
     suspend fun getById(id: String): GeoReminderEntity?
+
+    @Query("SELECT * FROM geo_reminders WHERE isActive = 1")
+    suspend fun getActiveRemindersSnapshot(): List<GeoReminderEntity>
 
     @Query("UPDATE geo_reminders SET lastTriggeredAt = :timestamp WHERE id = :id")
     suspend fun markTriggered(id: String, timestamp: Long)
@@ -30,4 +36,7 @@ interface GeoReminderDao {
 
     @Query("DELETE FROM geo_reminders")
     suspend fun deleteAll()
+
+    @Query("DELETE FROM geo_reminders WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
 }

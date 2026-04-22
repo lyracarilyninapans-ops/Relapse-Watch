@@ -10,9 +10,13 @@ import com.example.relapse_watch.domain.repository.ActivityRepository
 import com.example.relapse_watch.domain.repository.DailySummaryRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.max
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -24,8 +28,17 @@ class ActivityTrackingService @Inject constructor(
     private val preferences: WatchPreferences
 ) {
 
-    fun startTracking(intervalMs: Long = 30_000L): Flow<LocationPoint> {
-        return locationService.getLocationUpdates(intervalMs)
+    private val summaryMutex = Mutex()
+    private var cachedDate: String? = null
+    private var cachedSummary: DailySummary? = null
+    private var lastLocationPoint: LocationPoint? = null
+    private var visitedPlaceBuckets: MutableSet<String> = mutableSetOf()
+
+    fun startTracking(
+        intervalMs: Long = 30_000L,
+        profile: TrackingProfile = TrackingProfile.BALANCED
+    ): Flow<LocationPoint> {
+        return locationService.getLocationUpdates(intervalMs, profile)
     }
 
     suspend fun recordLocationUpdate(point: LocationPoint) {
@@ -63,6 +76,11 @@ class ActivityTrackingService @Inject constructor(
             eventType = eventType
         )
         activityRepository.insertRecord(record)
+
+        incrementEventCounters(
+            safeZoneExitDelta = if (eventType == EventTypes.SAFE_ZONE_EXIT) 1 else 0,
+            totalEventsDelta = 1
+        )
     }
 
     suspend fun recordReminderTriggered(reminderId: String, point: LocationPoint) {
@@ -82,18 +100,24 @@ class ActivityTrackingService @Inject constructor(
             metadata = mapOf("reminderId" to reminderId)
         )
         activityRepository.insertRecord(record)
+
+        incrementEventCounters(
+            reminderTriggeredDelta = 1,
+            totalEventsDelta = 1
+        )
     }
 
     suspend fun updateDailySummary() {
         val today = LocalDate.now()
+        val todayString = today.toString()
         val startOfDay = today.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val endOfDay = today.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
-        val records = activityRepository.getRecordsByDateRange(startOfDay, endOfDay).first()
+        val records = activityRepository.getRecordsByDateRange(startOfDay, endOfDay).first().sortedBy { it.timestamp }
         val locationRecords = records.filter { it.eventType == EventTypes.LOCATION_UPDATE }
 
         val summary = DailySummary(
-            date = today.toString(),
+            date = todayString,
             distanceMeters = computeTotalDistance(locationRecords),
             activeMinutes = 0,
             placesVisited = computeDistinctPlaces(locationRecords),
@@ -103,6 +127,89 @@ class ActivityTrackingService @Inject constructor(
             stepCount = 0
         )
         dailySummaryRepository.upsert(summary)
+
+        // Refresh in-memory incremental state from full recompute output.
+        summaryMutex.withLock {
+            cachedDate = todayString
+            cachedSummary = summary
+            lastLocationPoint = locationRecords.lastOrNull()?.toLocationPoint()
+            visitedPlaceBuckets = locationRecords
+                .map { placeBucket(it.latitude, it.longitude) }
+                .toMutableSet()
+        }
+    }
+
+    suspend fun updateDailySummaryWithLocation(point: LocationPoint) {
+        summaryMutex.withLock {
+            val today = LocalDate.now()
+            ensureDailyState(today)
+
+            val currentSummary = cachedSummary ?: DailySummary(date = today.toString())
+            val distanceDelta = lastLocationPoint?.let { previous ->
+                locationService.calculateDistance(previous, point).toDouble()
+            } ?: 0.0
+            val currentBucket = placeBucket(point.latitude, point.longitude)
+            visitedPlaceBuckets.add(currentBucket)
+
+            val nextSummary = currentSummary.copy(
+                distanceMeters = currentSummary.distanceMeters + distanceDelta,
+                placesVisited = max(currentSummary.placesVisited, visitedPlaceBuckets.size),
+                totalEvents = currentSummary.totalEvents + 1
+            )
+
+            cachedSummary = nextSummary
+            lastLocationPoint = point
+            dailySummaryRepository.upsert(nextSummary)
+        }
+    }
+
+    private suspend fun incrementEventCounters(
+        safeZoneExitDelta: Int = 0,
+        reminderTriggeredDelta: Int = 0,
+        totalEventsDelta: Int = 0
+    ) {
+        summaryMutex.withLock {
+            ensureDailyState(LocalDate.now())
+
+            val currentSummary = cachedSummary ?: DailySummary(date = LocalDate.now().toString())
+            val nextSummary = currentSummary.copy(
+                safeZoneExits = currentSummary.safeZoneExits + safeZoneExitDelta,
+                remindersTriggered = currentSummary.remindersTriggered + reminderTriggeredDelta,
+                totalEvents = currentSummary.totalEvents + totalEventsDelta
+            )
+
+            cachedSummary = nextSummary
+            dailySummaryRepository.upsert(nextSummary)
+        }
+    }
+
+    private suspend fun ensureDailyState(today: LocalDate) {
+        val date = today.toString()
+        if (cachedDate == date && cachedSummary != null) {
+            return
+        }
+
+        val summary = dailySummaryRepository.getSummaryForDate(date).first()
+            ?: DailySummary(date = date)
+        val (startOfDay, endOfDay) = todayEpochRange(today)
+        val records = activityRepository
+            .getRecordsByDateRange(startOfDay, endOfDay)
+            .first()
+            .sortedBy { it.timestamp }
+        val locationRecords = records.filter { it.eventType == EventTypes.LOCATION_UPDATE }
+
+        cachedDate = date
+        cachedSummary = summary
+        lastLocationPoint = locationRecords.lastOrNull()?.toLocationPoint()
+        visitedPlaceBuckets = locationRecords
+            .map { placeBucket(it.latitude, it.longitude) }
+            .toMutableSet()
+    }
+
+    private fun todayEpochRange(today: LocalDate): Pair<Long, Long> {
+        val startOfDay = today.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val endOfDay = today.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        return startOfDay to endOfDay
     }
 
     private fun computeTotalDistance(locationRecords: List<ActivityRecord>): Double {
@@ -128,6 +235,21 @@ class ActivityTrackingService @Inject constructor(
             if (isNew) clusters.add(point)
         }
         return clusters.size
+    }
+
+    private fun ActivityRecord.toLocationPoint(): LocationPoint {
+        return LocationPoint(
+            latitude = latitude,
+            longitude = longitude,
+            timestamp = timestamp
+        )
+    }
+
+    private fun placeBucket(latitude: Double, longitude: Double): String {
+        // Approx 100m buckets to avoid O(n^2) clustering checks.
+        val latBucket = (latitude * 1000).toInt()
+        val lonBucket = (longitude * 1000).toInt()
+        return "${abs(latBucket)}:${abs(lonBucket)}:${latBucket < 0}:${lonBucket < 0}"
     }
 
     companion object {

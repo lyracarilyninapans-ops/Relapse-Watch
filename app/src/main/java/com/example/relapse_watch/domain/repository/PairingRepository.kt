@@ -13,6 +13,7 @@ interface PairingRepository {
     fun isPaired(): Flow<Boolean>
     fun observeRemoteUnpairCommand(pairingCode: String): Flow<Boolean>
     fun observeCaregiverUnpairCommand(caregiverUid: String): Flow<Boolean>
+    suspend fun confirmRemoteUnpairFromServer(pairingCode: String, caregiverUid: String): Boolean
 
     /** Observe the patient Firestore document for live edits (name, age, etc.). */
     fun observePatientDocument(caregiverUid: String, patientId: String): Flow<Map<String, Any>?>

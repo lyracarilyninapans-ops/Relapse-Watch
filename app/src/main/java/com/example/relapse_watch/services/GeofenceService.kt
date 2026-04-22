@@ -4,14 +4,23 @@ import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.example.relapse_watch.data.local.dao.GeoReminderDao
 import com.example.relapse_watch.data.preferences.WatchPreferences
 import com.example.relapse_watch.domain.model.GeoReminder
 import com.example.relapse_watch.domain.model.SafeZoneConfig
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.location.Geofence
+import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.GeofencingRequest
+import android.Manifest
+import android.content.pm.PackageManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.tasks.await
 import javax.inject.Inject
@@ -33,14 +42,67 @@ class GeofenceService @Inject constructor(
 
     private val geofencePendingIntent: PendingIntent by lazy {
         val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
+        // Geofencing on some Wear OS + Play Services combinations requires mutable PI.
+        val mutabilityFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            PendingIntent.FLAG_MUTABLE
+        } else {
+            0
+        }
         PendingIntent.getBroadcast(
             context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or mutabilityFlag
         )
+    }
+
+    private fun hasFineLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun hasBackgroundLocationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_BACKGROUND_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun geofenceDiagnostics(): String {
+        val fineGranted = hasFineLocationPermission()
+        val backgroundGranted = hasBackgroundLocationPermission()
+        val playServicesCode = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)
+        val playServicesStatus = when (playServicesCode) {
+            ConnectionResult.SUCCESS -> "SUCCESS"
+            else -> playServicesCode.toString()
+        }
+        return "fine=$fineGranted background=$backgroundGranted sdk=${Build.VERSION.SDK_INT} playServices=$playServicesStatus"
+    }
+
+    private fun rootCause(error: Throwable): Throwable {
+        var current = error
+        while (current.cause != null && current.cause !== current) {
+            current = current.cause!!
+        }
+        return current
+    }
+
+    private fun isBrokerSecurityException(error: Throwable): Boolean {
+        val root = rootCause(error)
+        val message = (root.message ?: error.message).orEmpty()
+        return root is SecurityException &&
+            message.contains("Unknown calling package name 'com.google.android.gms'", ignoreCase = true)
     }
 
     @SuppressLint("MissingPermission")
     suspend fun registerSafeZone(config: SafeZoneConfig): Result<Unit> {
+        if (!hasFineLocationPermission()) {
+            val message = "Cannot register safe-zone geofence without ACCESS_FINE_LOCATION"
+            Log.w(TAG, "$message diagnostics=${geofenceDiagnostics()}")
+            return Result.failure(SecurityException(message))
+        }
+
         val key = "${config.id}|${config.centerLat}|${config.centerLng}|${config.radiusMeters}"
         if (key == currentSafeZoneKey) {
             Log.d(TAG, "Safe zone geofence already registered (skipped): ${config.id}")
@@ -65,7 +127,20 @@ class GeofenceService @Inject constructor(
             Log.d(TAG, "Geofence registered: ${config.id}")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to register geofence: ${config.id}", e)
+            if (e is CancellationException) throw e
+
+            if (isBrokerSecurityException(e)) {
+                val root = rootCause(e)
+                Log.e(
+                    TAG,
+                    "Google Play services broker rejected geofence registration for safe zone id=${config.id}. " +
+                        "Likely device/Play-services state issue; immediate retry skipped. diagnostics=${geofenceDiagnostics()} root=${root::class.java.simpleName}:${root.message}",
+                    e
+                )
+                return Result.failure(e)
+            }
+
+            Log.e(TAG, "Failed to register geofence: ${config.id} diagnostics=${geofenceDiagnostics()}", e)
             Result.failure(e)
         }
     }
@@ -90,7 +165,14 @@ class GeofenceService @Inject constructor(
         longitude: Double,
         radiusMeters: Int
     ): Result<Unit> {
-        val key = "reminder_$id|$latitude|$longitude|$radiusMeters"
+        if (!hasFineLocationPermission()) {
+            val message = "Cannot register reminder geofence without ACCESS_FINE_LOCATION"
+            Log.w(TAG, "$message reminderId=$id diagnostics=${geofenceDiagnostics()}")
+            return Result.failure(SecurityException(message))
+        }
+
+        val requestId = "reminder_$id"
+        val key = "$requestId|$latitude|$longitude|$radiusMeters"
 
         val persistedKeys = preferences.registeredGeofenceKeys.first()
         if (key in persistedKeys) {
@@ -100,7 +182,7 @@ class GeofenceService @Inject constructor(
 
         return try {
             val geofence = Geofence.Builder()
-                .setRequestId("reminder_$id")
+                .setRequestId(requestId)
                 .setCircularRegion(latitude, longitude, radiusMeters.toFloat())
                 .setExpirationDuration(Geofence.NEVER_EXPIRE)
                 .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER)
@@ -116,8 +198,61 @@ class GeofenceService @Inject constructor(
             Log.d(TAG, "Reminder geofence registered: $id")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to register reminder geofence: $id", e)
-            Result.failure(e)
+            if (e is CancellationException) throw e
+
+            if (isBrokerSecurityException(e)) {
+                val root = rootCause(e)
+                Log.e(
+                    TAG,
+                    "Google Play services broker rejected reminder geofence registration id=$id requestId=$requestId. " +
+                        "Likely device/Play-services state issue; immediate retry skipped. diagnostics=${geofenceDiagnostics()} root=${root::class.java.simpleName}:${root.message}",
+                    e
+                )
+                return Result.failure(e)
+            }
+
+            val api = e as? ApiException
+            val statusCode = api?.statusCode
+            val statusLabel = statusCode?.let { GeofenceStatusCodes.getStatusCodeString(it) } ?: "unknown"
+            Log.e(
+                TAG,
+                "Failed to register reminder geofence: $id requestId=$requestId statusCode=$statusCode status=$statusLabel persistedKeys=${persistedKeys.size} diagnostics=${geofenceDiagnostics()}",
+                e
+            )
+
+            // Self-heal path: stale OS state can reject addGeofences calls.
+            // Remove by requestId then retry once.
+            return try {
+                geofencingClient.removeGeofences(listOf(requestId)).await()
+                val geofence = Geofence.Builder()
+                    .setRequestId(requestId)
+                    .setCircularRegion(latitude, longitude, radiusMeters.toFloat())
+                    .setExpirationDuration(Geofence.NEVER_EXPIRE)
+                    .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER)
+                    .build()
+
+                val request = GeofencingRequest.Builder()
+                    .setInitialTrigger(0)
+                    .addGeofence(geofence)
+                    .build()
+
+                geofencingClient.addGeofences(request, geofencePendingIntent).await()
+                preferences.removeRegisteredGeofenceKeysStartingWith("$requestId|")
+                preferences.addRegisteredGeofenceKey(key)
+                Log.w(TAG, "Reminder geofence registered after retry: $id")
+                Result.success(Unit)
+            } catch (retryError: Exception) {
+                if (retryError is CancellationException) throw retryError
+                val retryApi = retryError as? ApiException
+                val retryCode = retryApi?.statusCode
+                val retryLabel = retryCode?.let { GeofenceStatusCodes.getStatusCodeString(it) } ?: "unknown"
+                Log.e(
+                    TAG,
+                    "Retry failed to register reminder geofence: $id requestId=$requestId statusCode=$retryCode status=$retryLabel diagnostics=${geofenceDiagnostics()}",
+                    retryError
+                )
+                Result.failure(retryError)
+            }
         }
     }
 

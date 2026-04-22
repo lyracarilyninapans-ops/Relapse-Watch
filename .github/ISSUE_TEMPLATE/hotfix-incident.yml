@@ -1,0 +1,126 @@
+name: Hotfix Incident
+description: Capture production incident details for expedited hotfix handling
+title: "hotfix: <short incident summary>"
+labels:
+  - hotfix
+  - incident
+body:
+  - type: input
+    id: incident_id
+    attributes:
+      label: Incident or ticket ID
+      description: Reference ID from monitoring or ticketing system
+      placeholder: INC-1234
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Sev-0 Critical
+        - Sev-1 High
+        - Sev-2 Medium
+        - Sev-3 Low
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Production impact
+      description: Describe user impact and affected core flows
+      placeholder: Sync failures affecting monitoring continuity on Wear OS
+    validations:
+      required: true
+
+  - type: textarea
+    id: detection
+    attributes:
+      label: Detection signals
+      description: Logs, alerts, dashboards, user reports
+      placeholder: Alert sync_failed spike at 14:20 UTC
+    validations:
+      required: true
+
+  - type: textarea
+    id: suspected_root_cause
+    attributes:
+      label: Suspected root cause
+      description: Current hypothesis and confidence level
+      placeholder: Reminder sync contract mismatch after deployment
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: affected_risks
+    attributes:
+      label: Related risk IDs
+      description: Select any matching risks from audit register
+      options:
+        - label: R1 Backup exposure
+        - label: R2 Media URL validation
+        - label: R3 Sync orchestration overlap
+        - label: R4 Summary recomputation cost
+        - label: R5 Destructive migration risk
+        - label: R6 Receiver export surface
+        - label: R7 Verbose log leakage
+        - label: R8 Geofence PendingIntent mutability
+        - label: R9 Reminder sync failure masking
+        - label: R10 Full-table reminder refresh churn
+        - label: R11 Firestore overwrite semantics
+        - label: R12 Minify disabled risk
+        - label: R13 Metadata type fidelity loss
+
+  - type: textarea
+    id: immediate_mitigation
+    attributes:
+      label: Immediate mitigation applied
+      description: Operational mitigations before code fix
+      placeholder: Disabled periodic reminder sync via remote flag
+    validations:
+      required: false
+
+  - type: textarea
+    id: hotfix_scope
+    attributes:
+      label: Minimal hotfix scope
+      description: The smallest safe change that resolves impact
+      placeholder: Add null-safe contract handling in reminder sync path only
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation_plan
+    attributes:
+      label: Validation plan
+      description: Tests and checks to run before merge
+      placeholder: Unit tests + targeted integration + release assemble + smoke
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback_plan
+    attributes:
+      label: Rollback plan
+      description: Revert strategy and rollback trigger thresholds
+      placeholder: Revert commit abc123 if sync_failed exceeds baseline by 2x for 15 minutes
+    validations:
+      required: true
+
+  - type: input
+    id: owner
+    attributes:
+      label: Hotfix owner
+      placeholder: @username
+    validations:
+      required: true
+
+  - type: input
+    id: reviewer
+    attributes:
+      label: Required reviewer
+      placeholder: @reviewer
+    validations:
+      required: true
