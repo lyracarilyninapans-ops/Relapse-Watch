@@ -6,7 +6,6 @@ import com.example.relapse_watch.domain.model.EventTypes
 import com.example.relapse_watch.domain.model.LocationPoint
 import com.example.relapse_watch.domain.repository.ActivityRepository
 import com.example.relapse_watch.domain.repository.DailySummaryRepository
-import com.example.relapse_watch.domain.repository.SafeZoneRepository
 import java.time.LocalDate
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -28,7 +27,6 @@ class ActivityTrackingServiceTest {
     private val activityRepository: ActivityRepository = mock()
     private val dailySummaryRepository: DailySummaryRepository = mock()
     private val preferences: WatchPreferences = mock()
-    private val safeZoneRepository: SafeZoneRepository = mock()
 
     @Before
     fun setup() {
@@ -36,15 +34,12 @@ class ActivityTrackingServiceTest {
             locationService,
             activityRepository,
             dailySummaryRepository,
-            preferences,
-            safeZoneRepository
+            preferences
         )
 
         whenever(dailySummaryRepository.getSummaryForDate(any())).thenReturn(flowOf(null))
         whenever(activityRepository.getRecordsByDateRange(any(), any())).thenReturn(flowOf(emptyList()))
         whenever(preferences.patientId).thenReturn(flowOf("patient1"))
-        // No active safe zone by default — all time counts as "outside"
-        whenever(safeZoneRepository.getActiveSafeZone()).thenReturn(flowOf(null))
     }
 
     @Test
